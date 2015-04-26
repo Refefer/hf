@@ -1,0 +1,5 @@
+#!/bin/bash
+while [ 1 ]; do
+    inotifywait src/*.hs -e modify -e move -e create -e delete 
+    cabal build
+done
