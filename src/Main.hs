@@ -1,16 +1,20 @@
 {-# Language OverloadedStrings #-}
 module Main where
 
-import Prelude hiding (lines)
-import System.IO (stdin)
-import System.Environment (getArgs)
-import Safe (headMay)
+import Control.Parallel.Strategies
 import Data.Text.Lazy.IO (hGetContents)
-import qualified Data.Text.Lazy as T
-import qualified Data.Heap as H
+import Data.List (sort)
 import qualified Data.Foldable as F
-import Control.Monad.State
+import qualified Data.Heap as H
+import qualified Data.Text.Lazy as T
+import Prelude hiding (lines)
+import Safe (headMay)
+import System.Environment (getArgs)
+import System.IO (stdin)
 import Text.EditDistance (levenshteinDistance, defaultEditCosts)
+
+data Query = Query { q :: String, qLen :: Int } deriving (Show)
+data ScoreStrat = EditDist | InfixLength | Length
 
 type Scorer = T.Text -> Int
 type RankedSet = H.MinHeap (Int, T.Text)
@@ -19,8 +23,8 @@ main :: IO ()
 main = do
   query  <- getQuery
   lines  <- readLines
-  let results = score (buildScorer query) lines 
-  let topItems =  H.take 10 results :: [(Int, T.Text)]
+  let results = score (buildScorer Length query) lines 
+  let topItems =  take 10 results :: [(Int, T.Text)]
   let serializeItem (x, y) = F.concat [show x, ": ", show y]
   let s = fmap serializeItem topItems
   let items =  "Items:" ++ (show $ length lines)
@@ -33,25 +37,27 @@ readLines = do
   return $ T.lines inp
 
 -- Get query as first argument
-getQuery :: IO T.Text
+getQuery :: IO Query
 getQuery = do
   args <- getArgs
-  let targs = fmap T.pack args
-  return $ maybe "" id $ headMay targs
-
-tLength :: T.Text -> Int
-tLength t = fromIntegral $ T.length t
+  let val = maybe "" id $ headMay args
+  return $ Query val (length val)
 
 -- Builds score function
-buildScorer :: T.Text -> Scorer
-buildScorer q t = minF $ fmap (dist . T.unpack) $ split t
-  where qs = T.unpack q
-        dist  = levenshteinDistance defaultEditCosts qs
-        minF xs = F.minimum $ (tLength q):xs
+buildScorer :: ScoreStrat -> Query -> Scorer
+buildScorer ss query = \t -> minF $ fmap (dist . T.unpack) $ split t
+  where dist  = eval ss query
+        minF xs = min (qLen query) $ F.minimum xs
         split txt = filter (/= "") $ T.split (== '/') txt
 
--- Score line accordingly
-score :: Scorer -> [T.Text] -> RankedSet
-score f ts = execState (mapM_ g ts) H.empty
-  where g = modify . H.insert . \x -> (f x, x)
+eval :: ScoreStrat -> Query -> String -> Int
+eval Length _ t = length t
+eval EditDist (Query qs _) t = levenshteinDistance defaultEditCosts qs t
+eval InfixLength (Query qs tLen) t = 
+  if T.isInfixOf (T.pack qs) (T.pack t) then (length t) - tLen else tLen
 
+-- Score line accordingly
+score :: Scorer -> [T.Text] -> [(Int, T.Text)]
+--score f = sort . (parMap rdeepseq (\x -> (f x, x)))
+score f = sort . fm . fmap (\x -> (f x, x))
+  where fm = withStrategy (parBuffer 100 rseq)

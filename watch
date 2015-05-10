@@ -1,5 +1,5 @@
 #!/bin/bash
 while [ 1 ]; do
-    inotifywait src/*.hs -e modify -e move -e create -e delete 
+    inotifywait src/*.hs hf.cabal -e modify -e move -e create -e delete 
     cabal build
 done

@@ -16,7 +16,8 @@ build-type:          Simple
 cabal-version:       >=1.10
 
 executable hf
-  ghc-options:         -Wall -O2 -rtsopts -prof -auto-all -caf-all -fforce-recomp
+  --ghc-options:         -Wall -O2 -rtsopts -auto-all -caf-all -fforce-recomp -threaded -eventlog
+  ghc-options:         -Wall -O2 -rtsopts -threaded
   main-is:             Main.hs
   -- other-modules:       
   -- other-extensions:    
@@ -25,6 +26,7 @@ executable hf
                        text,
                        heap == 1.0.0,
                        mtl  == 2.2.1,
-                       edit-distance == 0.2.1.2
+                       edit-distance == 0.2.1.2,
+                       parallel == 3.2.0.6
   hs-source-dirs:      src
   default-language:    Haskell2010
