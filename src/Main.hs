@@ -57,6 +57,11 @@ repl (r:rs) = do
   _ <- seq status $ mapM_ B.putStrLn s
   _ <- B.putStr "Items: " 
   _ <- B.putStrLn status
+  readInput (r:rs)
+
+readInput :: [ResultSet] -> IO ()
+readInput [] = exitSuccess
+readInput (r:rs) = do
   res <- readChar (query r)
   case res of 
     Just (Character c) -> repl (nr:r:rs)
@@ -176,6 +181,11 @@ chunk amt xs = c1:(chunk amt rest)
   where (c1, rest) = splitAt amt xs
 
 -- Merge facilities for lazy top elements, instead of sorting them all
+merge :: Ord b => (a -> b) -> [[a]] -> [a]
+merge _ []  = []
+merge _ [a] = a
+merge f ss = foldr (merge2 f) [] ss
+
 merge2 :: Ord b => (a -> b) -> [a] -> [a] -> [a]
 merge2 f (a:as) (b:bs)
   | f(a) < f(b) = a : merge2 f as (b:bs)
@@ -183,7 +193,4 @@ merge2 f (a:as) (b:bs)
 merge2 _ [] rs = rs
 merge2 _ rs [] = rs
 
-merge :: Ord b => (a -> b) -> [[a]] -> [a]
-merge _ []  = []
-merge _ [a] = a
-merge f ss = foldr (merge2 f) [] ss
+
