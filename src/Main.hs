@@ -37,14 +37,9 @@ main = do
   setupIO
   let qry = Query "" 0
   let rs  = zipWith (\x y -> (x, y)) [1..] lines
-  let (chunkSize, _) = (length lines) `divMod` 100
-  let chunks = rs `seq` chunk (chunkSize + 1) rs
+  let (chunkSize, _) = (length rs) `divMod` 100
+  let chunks = chunk (chunkSize + 1) rs
   repl [ResultSet qry ss chunks]
-
-chunk :: Int -> [a] -> [[a]]
-chunk _ [] = []
-chunk amt xs = c1:(chunk amt rest)
-  where (c1, rest) = splitAt amt xs
 
 setupIO :: IO ()
 setupIO = do
@@ -119,11 +114,15 @@ formatBest amt sl = fmap serializeItem topItems
 readLines :: IO [B.ByteString] 
 readLines = do
   inp <- B.getContents
-  -- Reopen
+  _   <- reOpenStdin
+  return $ B.lines inp
+
+-- Have to reopen stdin since getContents closes it
+reOpenStdin :: IO () 
+reOpenStdin = do 
   tty <- openFile "/dev/tty" ReadMode
   hSetBuffering tty NoBuffering
-  _   <- hDuplicateTo tty stdin
-  return $ B.lines inp
+  hDuplicateTo tty stdin
 
 -- Get query as first argument
 getStrat :: IO ScoreStrat
@@ -166,11 +165,17 @@ eval InfixLength (Query qs _) t
 
 -- Score line accordingly
 score :: Scorer -> [ResultList] -> [ScoredList]
-score f rl   = parMap rseq cms rl
+score f rl   = parMap rdeepseq cms rl
   where fo x = fmap (\i -> (i, x)) $ f x
         cms  = sort . catMaybes . (fmap fo)
 
--- Merge facilities for lazy top elements
+-- Chunks items into groups
+chunk :: Int -> [a] -> [[a]]
+chunk _ [] = []
+chunk amt xs = c1:(chunk amt rest)
+  where (c1, rest) = splitAt amt xs
+
+-- Merge facilities for lazy top elements, instead of sorting them all
 merge2 :: Ord b => (a -> b) -> [a] -> [a] -> [a]
 merge2 f (a:as) (b:bs)
   | f(a) < f(b) = a : merge2 f as (b:bs)
@@ -181,6 +186,4 @@ merge2 _ rs [] = rs
 merge :: Ord b => (a -> b) -> [[a]] -> [a]
 merge _ []  = []
 merge _ [a] = a
-merge f (a:b:ss) = merge f (mab:ss)
-  where mab = merge2 f a b
-
+merge f ss = foldr (merge2 f) [] ss
