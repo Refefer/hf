@@ -19,7 +19,7 @@ data Query = Query { q :: String, qLen :: Int } deriving (Show)
 data ScoreStrat = EditDist | InfixLength | Length
 data ResultSet = ResultSet { query   :: Query
                            , strat   :: ScoreStrat
-                           , itemSet :: ScoredList
+                           , itemSet :: [ScoredList]
                            }
 
 -- Movement keys
@@ -36,8 +36,16 @@ main = do
   lines <- readLines
   setupIO
   -- Sort by length
-  let qry     = Query "" 0
-  repl [ResultSet qry ss [(0, l) | l <- lines]]
+  let qry = Query "" 0
+  let rs  = zipWith (\x y -> (x, y)) [1..] lines
+  let (chunkSize, _) = (length lines) `divMod` 20
+  let chunks = rs `seq` chunk (chunkSize + 1) rs
+  repl [ResultSet qry ss chunks]
+
+chunk :: Int -> [a] -> [[a]]
+chunk _ [] = []
+chunk amt xs = c1:(chunk amt rest)
+  where (c1, rest) = splitAt amt xs
 
 setupIO :: IO ()
 setupIO = do
@@ -49,8 +57,8 @@ repl [] = exitSuccess
 repl (r:rs) = do
   -- Show current result set
   let is = itemSet r
-  let s = formatBest 10 is
-  let status = B.pack . show . length $ is
+  let s = formatBest 10 $ merge fst is
+  let status = B.pack . show . sum $ fmap length is
   _ <- B.putStrLn ""
   _ <- seq status $ mapM_ B.putStrLn s
   _ <- B.putStr "Items: " 
@@ -73,10 +81,10 @@ unscore = fmap snd
 -- Refine a previous search result with query
 refine :: ResultSet -> Query -> ResultSet
 refine rs = querySet ss rl
-  where rl = unscore . itemSet $ rs
+  where rl = (fmap unscore) . itemSet $ rs
         ss = strat rs
 
-querySet :: ScoreStrat -> ResultList -> Query -> ResultSet
+querySet :: ScoreStrat -> [ResultList] -> Query -> ResultSet
 querySet ss rl qry = ResultSet qry ss newSet
   where scorer  = buildScorer ss qry
         newSet = score scorer rl
@@ -158,8 +166,22 @@ eval InfixLength (Query qs _) t
         suffScore = if B.isSuffixOf bqs t then -1 else 0
 
 -- Score line accordingly
-score :: Scorer -> ResultList -> ScoredList
-score f rl   = sort cats
-  where fm   = withStrategy (parBuffer 2000 rseq)
-        fo x = fmap (\i -> (i, x)) $ f x
-        cats = catMaybes . fm . (fmap fo) $ rl
+score :: Scorer -> [ResultList] -> [ScoredList]
+score f rl   = parMap rseq cms rl
+  where fo x = fmap (\i -> (i, x)) $ f x
+        cms  = sort . catMaybes . (fmap fo)
+
+-- Merge facilities for lazy top elements
+merge2 :: Ord b => (a -> b) -> [a] -> [a] -> [a]
+merge2 f (a:as) (b:bs)
+  | f(a) < f(b) = a : merge2 f as (b:bs)
+  | otherwise   = b : merge2 f (a:as) bs
+merge2 _ [] rs = rs
+merge2 _ rs [] = rs
+
+merge :: Ord b => (a -> b) -> [[a]] -> [a]
+merge _ []  = []
+merge _ [a] = a
+merge f (a:b:ss) = merge f (mab:ss)
+  where mab = merge2 f a b
+
