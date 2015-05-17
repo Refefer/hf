@@ -2,62 +2,164 @@
 module Main where
 
 import Control.Parallel.Strategies
-import Data.Text.Lazy.IO (hGetContents)
 import Data.List (sort)
-import qualified Data.Foldable as F
-import qualified Data.Heap as H
-import qualified Data.Text.Lazy as T
+import Data.Maybe (catMaybes)
+import GHC.IO.Handle (hDuplicateTo)
 import Prelude hiding (lines)
-import Safe (headMay)
+import qualified Data.ByteString.Char8 as B 
+import Safe (headDef)
 import System.Environment (getArgs)
-import System.IO (stdin)
+import System.Exit (exitSuccess)
+--import System.Console.Haskeline (runInputT, getInputChar, defaultSettings)
+import System.IO (stdin, stdout, hGetChar, hSetBuffering, openFile, hSetEcho, hFlush,
+                  IOMode( ReadMode ), BufferMode ( NoBuffering ) )
 import Text.EditDistance (levenshteinDistance, defaultEditCosts)
 
 data Query = Query { q :: String, qLen :: Int } deriving (Show)
 data ScoreStrat = EditDist | InfixLength | Length
+data ResultSet = ResultSet { query   :: Query
+                           , strat   :: ScoreStrat
+                           , itemSet :: ScoredList
+                           }
 
-type Scorer = T.Text -> Int
-type RankedSet = H.MinHeap (Int, T.Text)
+-- Movement keys
+data Arrow = Up | Down | Left | Right
+data Key = Character Char | BackSpace | Movement Arrow | Enter | Tab | CtrlD
+
+type Scorer = B.ByteString -> Maybe Int
+type ResultList = [B.ByteString]
+type ScoredList = [(Int, B.ByteString)]
 
 main :: IO ()
 main = do
-  query  <- getQuery
-  lines  <- readLines
-  let results = score (buildScorer Length query) lines 
-  let topItems =  take 10 results :: [(Int, T.Text)]
-  let serializeItem (x, y) = F.concat [show x, ": ", show y]
-  let s = fmap serializeItem topItems
-  let items =  "Items:" ++ (show $ length lines)
-  mapM_ putStrLn (items:s)
+  ss    <- getStrat
+  lines <- readLines
+  setupIO
+  -- Sort by length
+  let qry     = Query "" 0
+  repl [ResultSet qry ss [(0, l) | l <- lines]]
+
+setupIO :: IO ()
+setupIO = do
+  --hSetBuffering stdout NoBuffering
+  hSetEcho stdin False
+
+repl :: [ResultSet] -> IO ()
+repl [] = exitSuccess
+repl (r:rs) = do
+  -- Show current result set
+  let is = itemSet r
+  let s = formatBest 10 is
+  let status = B.pack . show . length $ is
+  _ <- B.putStrLn ""
+  _ <- seq status $ mapM_ B.putStrLn s
+  _ <- B.putStr "Items: " 
+  _ <- B.putStrLn status
+  res <- readChar (query r)
+  case res of 
+    Just (Character c) -> repl (nr:r:rs)
+      where nqry = addChar c (query r)
+            nr   = refine r nqry
+    Just BackSpace -> case rs of [] -> repl [r]
+                                 _  -> repl rs
+    Just CtrlD     -> exitSuccess
+    Just Enter     -> exitSuccess
+    Nothing        -> exitSuccess
+    _              -> repl (r:rs)
+
+unscore :: ScoredList -> ResultList
+unscore = fmap snd
+
+-- Refine a previous search result with query
+refine :: ResultSet -> Query -> ResultSet
+refine rs = querySet ss rl
+  where rl = unscore . itemSet $ rs
+        ss = strat rs
+
+querySet :: ScoreStrat -> ResultList -> Query -> ResultSet
+querySet ss rl qry = ResultSet qry ss newSet
+  where scorer  = buildScorer ss qry
+        newSet = score scorer rl
+
+addChar :: Char -> Query -> Query
+addChar c (Query qry ql) = Query nq nl
+  where nq = qry ++ [c]
+        nl = 1 + ql
+
+readChar :: Query -> IO (Maybe Key)
+readChar (Query qry _) = do 
+  _ <- putStr $ "> " ++ qry
+  _ <- hFlush stdout
+  c <- hGetChar stdin
+  return $ matchChar c
+
+
+matchChar :: Char -> Maybe Key
+matchChar '\DEL' = Just BackSpace
+matchChar '\n'   = Just Enter
+matchChar '\t'   = Just Tab
+matchChar '\ESC' = Nothing
+matchChar '\EOT' = Just CtrlD
+matchChar a      = Just $ Character a
+
+formatBest :: Int -> ScoredList -> ResultList
+formatBest amt sl = fmap serializeItem topItems
+  where topItems = take amt sl
+        toBS = B.pack . show
+        serializeItem (x, y) = B.concat [toBS x, ": ", y]
 
 -- Read lines from stdin
-readLines :: IO [T.Text] 
+readLines :: IO [B.ByteString] 
 readLines = do
-  inp <- hGetContents stdin 
-  return $ T.lines inp
+  inp <- B.getContents
+  -- Reopen
+  tty <- openFile "/dev/tty" ReadMode
+  hSetBuffering tty NoBuffering
+  _   <- hDuplicateTo tty stdin
+  return $ B.lines inp
 
 -- Get query as first argument
-getQuery :: IO Query
-getQuery = do
+getStrat :: IO ScoreStrat
+getStrat = do
   args <- getArgs
-  let val = maybe "" id $ headMay args
-  return $ Query val (length val)
+  let edt = headDef "1" args
+  return $ case edt of "2" -> EditDist
+                       "3" -> Length
+                       _   -> InfixLength
 
 -- Builds score function
 buildScorer :: ScoreStrat -> Query -> Scorer
-buildScorer ss query = \t -> minF $ fmap (dist . T.unpack) $ split t
-  where dist  = eval ss query
-        minF xs = min (qLen query) $ F.minimum xs
-        split txt = filter (/= "") $ T.split (== '/') txt
+buildScorer ss = eval ss
 
-eval :: ScoreStrat -> Query -> String -> Int
-eval Length _ t = length t
-eval EditDist (Query qs _) t = levenshteinDistance defaultEditCosts qs t
-eval InfixLength (Query qs tLen) t = 
-  if T.isInfixOf (T.pack qs) (T.pack t) then (length t) - tLen else tLen
+eval :: ScoreStrat -> Query -> B.ByteString -> Maybe Int
+eval Length _ t = Just $ B.length t
+
+eval EditDist (Query [c] 1) t
+  | B.elem c t = Just $ tlen - 1
+  | otherwise = Nothing
+  where tlen  = B.length t
+
+eval EditDist (Query qs _) t = Just $ min dist (tlen - 1)
+  where tlen = B.length t
+        raw_t = B.unpack t
+        dist = levenshteinDistance defaultEditCosts qs raw_t
+
+eval InfixLength (Query [c] 1) t 
+  | B.elem c t = Just 1 
+  | otherwise  = Nothing
+
+eval InfixLength (Query qs _) t
+  | B.isInfixOf bqs t = Just $ lenScore + prefScore + suffScore
+  | otherwise         = Nothing
+  where bqs       = B.pack qs
+        tLen      = (fromIntegral $ B.length t) :: Double
+        lenScore  = round $ tLen ** 0.5 
+        prefScore = if B.isPrefixOf bqs t then -1 else 0
+        suffScore = if B.isSuffixOf bqs t then -1 else 0
 
 -- Score line accordingly
-score :: Scorer -> [T.Text] -> [(Int, T.Text)]
---score f = sort . (parMap rdeepseq (\x -> (f x, x)))
-score f = sort . fm . fmap (\x -> (f x, x))
-  where fm = withStrategy (parBuffer 100 rseq)
+score :: Scorer -> ResultList -> ScoredList
+score f rl   = sort cats
+  where fm   = withStrategy (parBuffer 2000 rseq)
+        fo x = fmap (\i -> (i, x)) $ f x
+        cats = catMaybes . fm . (fmap fo) $ rl
