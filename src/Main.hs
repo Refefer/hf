@@ -35,10 +35,9 @@ main = do
   ss    <- getStrat
   lines <- readLines
   setupIO
-  -- Sort by length
   let qry = Query "" 0
   let rs  = zipWith (\x y -> (x, y)) [1..] lines
-  let (chunkSize, _) = (length lines) `divMod` 20
+  let (chunkSize, _) = (length lines) `divMod` 100
   let chunks = rs `seq` chunk (chunkSize + 1) rs
   repl [ResultSet qry ss chunks]
 
