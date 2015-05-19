@@ -35,10 +35,10 @@ main = do
   ss    <- getStrat
   lines <- readLines
   setupIO
-  let qry = Query "" 0
   let rs  = zipWith (\x y -> (x, y)) [1..] lines
   let (chunkSize, _) = (length rs) `divMod` 100
   let chunks = chunk (chunkSize + 1) rs
+  let qry = Query "" 0
   repl [ResultSet qry ss chunks]
 
 setupIO :: IO ()
@@ -59,6 +59,7 @@ repl (r:rs) = do
   _ <- B.putStrLn status
   readInput (r:rs)
 
+-- Updates the state
 readInput :: [ResultSet] -> IO ()
 readInput [] = exitSuccess
 readInput (r:rs) = do
@@ -74,13 +75,10 @@ readInput (r:rs) = do
     Nothing        -> exitSuccess
     _              -> repl (r:rs)
 
-unscore :: ScoredList -> ResultList
-unscore = fmap snd
-
 -- Refine a previous search result with query
 refine :: ResultSet -> Query -> ResultSet
 refine rs = querySet ss rl
-  where rl = (fmap unscore) . itemSet $ rs
+  where rl = (fmap (fmap snd)) . itemSet $ rs
         ss = strat rs
 
 querySet :: ScoreStrat -> [ResultList] -> Query -> ResultSet
@@ -99,7 +97,6 @@ readChar (Query qry _) = do
   _ <- hFlush stdout
   c <- hGetChar stdin
   return $ matchChar c
-
 
 matchChar :: Char -> Maybe Key
 matchChar '\DEL' = Just BackSpace
