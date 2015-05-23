@@ -27,6 +27,12 @@ data SystemState = SystemState { current :: ResultSet
                                , cursorPos  :: Int
                                }
 data Terminal = Exit | Updated SystemState | Selected B.ByteString
+data Justify = LJustify | RJustify
+data Row = Line Int | Bottom
+data Write = Write { justify :: Justify 
+                   , row :: Row
+                   , contents :: String 
+                   }
 
 -- Movement keys
 type Scorer = B.ByteString -> Maybe Int
@@ -50,12 +56,14 @@ initUI rs = runCurses $ defaultWindow >>= (ui rs)
 
 ui :: SystemState -> Window -> Curses (Maybe B.ByteString)
 ui ss@(SystemState r _ _) w = do
-  coords@(rows, cols) <- screenSize
+  coords@(rows, _) <- iScreenSize
   updateWindow w $ do
     clearScreen coords
-    printTopItems cols (rows - 2) r
-    printStatus cols (rows - 1) r
-    printQuery cols . query $ r
+    applyWrites coords $ concat [
+        take (rows - 2) . printTopItems $ r,
+        [printStatus r],
+        [printQuery . query $ r]
+      ]
   render
   event <- readInput w 
   case processEvent ss event of
@@ -63,10 +71,30 @@ ui ss@(SystemState r _ _) w = do
     Updated newSs -> ui newSs w
     Selected bs -> return $ Just bs
 
+iScreenSize :: Curses (Int, Int)
+iScreenSize = do
+  (r, c) <- screenSize
+  return $ (fromIntegral r, fromIntegral c)
+
+applyWrites :: (Int, Int) -> [Write] -> Update ()
+applyWrites _ [] = return ()
+applyWrites coords@(r,_) (w@(Write _ Bottom _):ws) = applyWrites coords (nw:ws)
+  where nw = w { row = Line (r - 1) }
+
+applyWrites coords@(_,c) ((Write LJustify (Line r) s):ws) = do
+  moveCursor (fromIntegral r) 0
+  drawString $ take c s
+  applyWrites coords ws
+
+applyWrites coords@(_,c) ((Write RJustify (Line r) s):ws) = do
+  moveCursor (fromIntegral r) $ fromIntegral . max 0 $ c - (length s) - 1
+  drawString $ take c s
+  applyWrites coords ws
+
 -- We don't have a clear screen in this version of the library, so write one
-clearScreen :: (Integer, Integer) -> Update ()
+clearScreen :: (Int, Int) -> Update ()
 clearScreen (rows, cols) = do
-  let coords = [(r, c) | r <- [0..(rows - 1)], c <- [0..(cols - 2)]]
+  let coords = [(fromIntegral r, fromIntegral c) | r <- [0..(rows - 1)], c <- [0..(cols - 2)]]
   let clearPixel (r,c) = (moveCursor r c) >> (drawString " ")
   mapM_ clearPixel coords
 
@@ -85,40 +113,29 @@ processEvent (SystemState r _ cp) (EventCharacter '\n') = Selected bs
   where bs = snd $ (orderedItems r) !! cp
 processEvent _  (EventCharacter '\EOT') = Exit
 processEvent ss@(SystemState r rs _) (EventCharacter c) = Updated newSS
-  where newR = refine r . addChar c . query $ r
+  where newR = refine r . addChar . query $ r
         newSS = ss { current = newR, history = (r:rs) }
+        addChar (Query qry ql) = Query (qry ++ [c]) (ql + 1)
 
 processEvent ss _ = Updated ss
 
-printQuery :: Integer -> Query -> Update ()
-printQuery maxC qry = writeAtLine maxC 0 (q qry)
+printQuery :: Query -> Write
+printQuery = writeAtLine 0 . q 
 
 orderedItems :: ResultSet -> ScoredList
 orderedItems = merge fst . itemSet
 
-printTopItems :: Integer -> Integer -> ResultSet -> Update ()
-printTopItems mc sn rs = do
-  let n = fromIntegral sn
-  let formatBest amt = fmap snd . take amt
-  let items = fmap B.unpack . formatBest n . orderedItems $ rs
-  let f = uncurry (writeAtLine mc)
-  mapM_ f $ zip [1..] items 
+printTopItems :: ResultSet -> [Write]
+printTopItems = zipWith writeAtLine [1..] .  items 
+  where items = fmap B.unpack . fmap snd . orderedItems 
 
-printStatus :: Integer -> Integer -> ResultSet -> Update ()
-printStatus c r rs = do
-  let count = show . sum . fmap length . itemSet $ rs
-  let status = "[" ++ count  ++ "]"
-  let offset = c - (fromIntegral . length $ status) - 1
-  writeAt c (r, offset) status
+printStatus :: ResultSet -> Write
+printStatus  = Write RJustify Bottom . status . count
+  where count = show . sum . fmap length . itemSet 
+        status c = "[" ++ c ++ "]"
 
-writeAtLine :: Integer -> Integer -> String -> Update ()
-writeAtLine maxC r = writeAt maxC (r, 0) 
-
-writeAt :: Integer -> (Integer, Integer) -> String -> Update ()
-writeAt maxC (r, c) content = do
-  moveCursor r c
-  let maxString = fromIntegral $ maxC - c
-  drawString . take maxString $ content
+writeAtLine :: Int -> String -> Write
+writeAtLine r = Write LJustify (Line r)
 
 -- Refine a previous search result with query
 refine :: ResultSet -> Query -> ResultSet
@@ -130,11 +147,6 @@ querySet :: ScoreStrat -> [ResultList] -> Query -> ResultSet
 querySet ss rl qry = ResultSet qry ss newSet
   where scorer  = buildScorer ss qry
         newSet = score scorer rl
-
-addChar :: Char -> Query -> Query
-addChar c (Query qry ql) = Query nq nl
-  where nq = qry ++ [c]
-        nl = 1 + ql
 
 -- Read lines from stdin
 readLines :: IO [B.ByteString] 
