@@ -4,16 +4,17 @@ module Main where
 import Control.Parallel.Strategies
 import Data.List (sort)
 import Data.Maybe (catMaybes)
+import Debug.Trace (trace)
 import GHC.IO.Handle (hDuplicateTo)
 import Prelude hiding (lines)
 import qualified Data.ByteString.Char8 as B 
 import Safe (headDef)
 import System.Environment (getArgs)
-import System.Exit (exitSuccess)
 --import System.Console.Haskeline (runInputT, getInputChar, defaultSettings)
-import System.IO (stdin, stdout, hGetChar, hSetBuffering, openFile, hSetEcho, hFlush,
+import System.IO (stdin, hSetBuffering, openFile, hSetEcho,
                   IOMode( ReadMode ), BufferMode ( NoBuffering ) )
 import Text.EditDistance (levenshteinDistance, defaultEditCosts)
+import UI.NCurses
 
 data Query = Query { q :: String, qLen :: Int } deriving (Show)
 data ScoreStrat = EditDist | InfixLength | Length
@@ -22,10 +23,13 @@ data ResultSet = ResultSet { query   :: Query
                            , itemSet :: [ScoredList]
                            }
 
--- Movement keys
-data Arrow = Up | Down | Left | Right
-data Key = Character Char | BackSpace | Movement Arrow | Enter | Tab | CtrlD
+data SystemState = SystemState { current :: ResultSet
+                               , history :: [ResultSet]
+                               , cursorPos  :: Int
+                               }
+data Terminal = Exit | Updated SystemState | Selected SystemState
 
+-- Movement keys
 type Scorer = B.ByteString -> Maybe Int
 type ResultList = [B.ByteString]
 type ScoredList = [(Int, B.ByteString)]
@@ -35,45 +39,89 @@ main = do
   ss    <- getStrat
   lines <- readLines
   setupIO
-  let rs  = zipWith (\x y -> (x, y)) [1..] lines
+  let rs  = zip [1..] lines
   let (chunkSize, _) = (length rs) `divMod` 100
   let chunks = chunk (chunkSize + 1) rs
   let qry = Query "" 0
-  repl [ResultSet qry ss chunks]
+  _ <- initUI $ SystemState (ResultSet qry ss chunks) [] 0
+  return ()
 
 setupIO :: IO ()
 setupIO = do
   --hSetBuffering stdout NoBuffering
   hSetEcho stdin False
 
-repl :: [ResultSet] -> IO ()
-repl [] = exitSuccess
-repl (r:rs) = do
-  -- Show current result set
-  let is = itemSet r
-  let s = formatBest 10 $ merge fst is
-  let status = B.pack . show . sum $ fmap length is
-  _ <- B.putStrLn ""
-  _ <- seq status $ mapM_ B.putStrLn s
-  _ <- B.putStr "Items: " 
-  _ <- B.putStrLn status
-  readInput (r:rs)
+-- Run the Curses UI
+initUI :: SystemState -> IO (Maybe B.ByteString)
+initUI rs = runCurses $ do
+  setEcho False
+  w <- defaultWindow
+  ui w rs
 
--- Updates the state
-readInput :: [ResultSet] -> IO ()
-readInput [] = exitSuccess
-readInput (r:rs) = do
-  res <- readChar (query r)
-  case res of 
-    Just (Character c) -> repl (nr:r:rs)
-      where nqry = addChar c (query r)
-            nr   = refine r nqry
-    Just BackSpace -> case rs of [] -> repl [r]
-                                 _  -> repl rs
-    Just CtrlD     -> exitSuccess
-    Just Enter     -> exitSuccess
-    Nothing        -> exitSuccess
-    _              -> repl (r:rs)
+ui :: Window -> SystemState -> Curses (Maybe B.ByteString)
+ui w ss @ (SystemState r _ _) = do
+  coords@(rows, cols) <- screenSize
+  updateWindow w $ do
+    clearScreen coords
+    printTopItems cols (rows - 2) r
+    printStatus cols (rows - 1) r
+    printQuery cols . query $ r
+  render
+  event <- readInput w 
+  case processEvent ss event of
+    Exit -> return Nothing
+    Updated newSs -> ui w newSs 
+    Selected _ -> return Nothing
+
+-- We don't have a clear screen in this version of the library, so write one
+clearScreen :: (Integer, Integer) -> Update ()
+clearScreen (rows, cols) = do
+  let coords = [(r, c) | r <- [0..(rows - 1)], c <- [0..(cols - 2)]]
+  let clearPixel (r,c) = (moveCursor r c) >> (drawString " ")
+  sequence_ . fmap clearPixel $ coords
+
+readInput :: Window -> Curses Event
+readInput w = do
+  ev <- getEvent w $ Just 1000 -- Nothing doesn't work.
+  case ev of
+    Nothing  -> readInput w
+    Just ev' -> return ev'
+
+processEvent :: SystemState -> Event -> Terminal
+processEvent ss (EventSpecialKey KeyBackspace) = case ss of
+  (SystemState _ (r:rs) _) -> Updated $ ss { current = r, history = rs }
+  _ -> Updated ss
+processEvent ss (EventCharacter '\n') = Selected ss
+processEvent ss (EventCharacter '\EOT') = Exit
+processEvent ss@(SystemState r rs _) (EventCharacter c) = Updated newSS
+  where newR = refine r . addChar c . query $ r
+        newSS = ss { current = newR, history = (r:rs) }
+
+processEvent ss _ = Updated ss
+
+printQuery :: Integer -> Query -> Update ()
+printQuery maxC qry = writeAtLine maxC 0 (q qry)
+
+printTopItems :: Integer -> Integer -> ResultSet -> Update ()
+printTopItems mc sn rs = do
+  let n = fromIntegral sn
+  let items = fmap B.unpack . formatBest n . merge fst . itemSet $ rs
+  let f = uncurry (writeAtLine mc)
+  mapM_ f $ zip [1..] items 
+
+printStatus :: Integer -> Integer -> ResultSet -> Update ()
+printStatus c r rs = do
+  let status = show . sum . fmap length . itemSet $ rs
+  writeAtLine c r status
+
+writeAtLine :: Integer -> Integer -> String -> Update ()
+writeAtLine maxC r = writeAt maxC (r, 0) 
+
+writeAt :: Integer -> (Integer, Integer) -> String -> Update ()
+writeAt maxC (r, c) content = do
+  moveCursor r c
+  let maxString = fromIntegral $ maxC - c
+  drawString . take maxString $ content
 
 -- Refine a previous search result with query
 refine :: ResultSet -> Query -> ResultSet
@@ -90,21 +138,6 @@ addChar :: Char -> Query -> Query
 addChar c (Query qry ql) = Query nq nl
   where nq = qry ++ [c]
         nl = 1 + ql
-
-readChar :: Query -> IO (Maybe Key)
-readChar (Query qry _) = do 
-  _ <- putStr $ "> " ++ qry
-  _ <- hFlush stdout
-  c <- hGetChar stdin
-  return $ matchChar c
-
-matchChar :: Char -> Maybe Key
-matchChar '\DEL' = Just BackSpace
-matchChar '\n'   = Just Enter
-matchChar '\t'   = Just Tab
-matchChar '\ESC' = Nothing
-matchChar '\EOT' = Just CtrlD
-matchChar a      = Just $ Character a
 
 formatBest :: Int -> ScoredList -> ResultList
 formatBest amt sl = fmap serializeItem topItems
