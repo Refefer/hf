@@ -78,7 +78,7 @@ clearScreen :: (Integer, Integer) -> Update ()
 clearScreen (rows, cols) = do
   let coords = [(r, c) | r <- [0..(rows - 1)], c <- [0..(cols - 2)]]
   let clearPixel (r,c) = (moveCursor r c) >> (drawString " ")
-  sequence_ . fmap clearPixel $ coords
+  mapM_ clearPixel coords
 
 readInput :: Window -> Curses Event
 readInput w = do
@@ -222,5 +222,3 @@ merge2 f (a:as) (b:bs)
   | otherwise   = b : merge2 f (a:as) bs
 merge2 _ [] rs = rs
 merge2 _ rs [] = rs
-
-
