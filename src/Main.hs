@@ -4,14 +4,13 @@ module Main where
 import Control.Parallel.Strategies
 import Data.List (sort)
 import Data.Maybe (catMaybes)
-import Debug.Trace (trace)
 import GHC.IO.Handle (hDuplicateTo)
 import Prelude hiding (lines)
 import qualified Data.ByteString.Char8 as B 
 import Safe (headDef)
 import System.Environment (getArgs)
 --import System.Console.Haskeline (runInputT, getInputChar, defaultSettings)
-import System.IO (stdin, hSetBuffering, openFile, hSetEcho,
+import System.IO (stdin, hSetBuffering, openFile,
                   IOMode( ReadMode ), BufferMode ( NoBuffering ) )
 import Text.EditDistance (levenshteinDistance, defaultEditCosts)
 import UI.NCurses
@@ -27,7 +26,7 @@ data SystemState = SystemState { current :: ResultSet
                                , history :: [ResultSet]
                                , cursorPos  :: Int
                                }
-data Terminal = Exit | Updated SystemState | Selected SystemState
+data Terminal = Exit | Updated SystemState | Selected B.ByteString
 
 -- Movement keys
 type Scorer = B.ByteString -> Maybe Int
@@ -38,28 +37,19 @@ main :: IO ()
 main = do
   ss    <- getStrat
   lines <- readLines
-  setupIO
-  let rs  = zip [1..] lines
-  let (chunkSize, _) = (length rs) `divMod` 100
-  let chunks = chunk (chunkSize + 1) rs
-  let qry = Query "" 0
-  _ <- initUI $ SystemState (ResultSet qry ss chunks) [] 0
-  return ()
-
-setupIO :: IO ()
-setupIO = do
-  --hSetBuffering stdout NoBuffering
-  hSetEcho stdin False
+  let rs        = zip [1..] lines
+  let chunkSize = fst . divMod (length rs) $ 100
+  let chunks    = chunk (chunkSize + 1) rs
+  let qry       = Query "" 0
+  bs <- initUI $ SystemState (ResultSet qry ss chunks) [] 0
+  maybe (return ()) B.putStrLn bs
 
 -- Run the Curses UI
 initUI :: SystemState -> IO (Maybe B.ByteString)
-initUI rs = runCurses $ do
-  setEcho False
-  w <- defaultWindow
-  ui w rs
+initUI rs = runCurses $ defaultWindow >>= (ui rs)
 
-ui :: Window -> SystemState -> Curses (Maybe B.ByteString)
-ui w ss @ (SystemState r _ _) = do
+ui :: SystemState -> Window -> Curses (Maybe B.ByteString)
+ui ss@(SystemState r _ _) w = do
   coords@(rows, cols) <- screenSize
   updateWindow w $ do
     clearScreen coords
@@ -70,8 +60,8 @@ ui w ss @ (SystemState r _ _) = do
   event <- readInput w 
   case processEvent ss event of
     Exit -> return Nothing
-    Updated newSs -> ui w newSs 
-    Selected _ -> return Nothing
+    Updated newSs -> ui newSs w
+    Selected bs -> return $ Just bs
 
 -- We don't have a clear screen in this version of the library, so write one
 clearScreen :: (Integer, Integer) -> Update ()
@@ -91,8 +81,9 @@ processEvent :: SystemState -> Event -> Terminal
 processEvent ss (EventSpecialKey KeyBackspace) = case ss of
   (SystemState _ (r:rs) _) -> Updated $ ss { current = r, history = rs }
   _ -> Updated ss
-processEvent ss (EventCharacter '\n') = Selected ss
-processEvent ss (EventCharacter '\EOT') = Exit
+processEvent (SystemState r _ cp) (EventCharacter '\n') = Selected bs
+  where bs = snd $ (orderedItems r) !! cp
+processEvent _  (EventCharacter '\EOT') = Exit
 processEvent ss@(SystemState r rs _) (EventCharacter c) = Updated newSS
   where newR = refine r . addChar c . query $ r
         newSS = ss { current = newR, history = (r:rs) }
@@ -102,17 +93,23 @@ processEvent ss _ = Updated ss
 printQuery :: Integer -> Query -> Update ()
 printQuery maxC qry = writeAtLine maxC 0 (q qry)
 
+orderedItems :: ResultSet -> ScoredList
+orderedItems = merge fst . itemSet
+
 printTopItems :: Integer -> Integer -> ResultSet -> Update ()
 printTopItems mc sn rs = do
   let n = fromIntegral sn
-  let items = fmap B.unpack . formatBest n . merge fst . itemSet $ rs
+  let formatBest amt = fmap snd . take amt
+  let items = fmap B.unpack . formatBest n . orderedItems $ rs
   let f = uncurry (writeAtLine mc)
   mapM_ f $ zip [1..] items 
 
 printStatus :: Integer -> Integer -> ResultSet -> Update ()
 printStatus c r rs = do
-  let status = show . sum . fmap length . itemSet $ rs
-  writeAtLine c r status
+  let count = show . sum . fmap length . itemSet $ rs
+  let status = "[" ++ count  ++ "]"
+  let offset = c - (fromIntegral . length $ status) - 1
+  writeAt c (r, offset) status
 
 writeAtLine :: Integer -> Integer -> String -> Update ()
 writeAtLine maxC r = writeAt maxC (r, 0) 
@@ -138,12 +135,6 @@ addChar :: Char -> Query -> Query
 addChar c (Query qry ql) = Query nq nl
   where nq = qry ++ [c]
         nl = 1 + ql
-
-formatBest :: Int -> ScoredList -> ResultList
-formatBest amt sl = fmap serializeItem topItems
-  where topItems = take amt sl
-        toBS = B.pack . show
-        serializeItem (x, y) = B.concat [toBS x, ": ", y]
 
 -- Read lines from stdin
 readLines :: IO [B.ByteString] 
