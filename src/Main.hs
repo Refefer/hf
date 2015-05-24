@@ -106,11 +106,10 @@ applyWrites c ws = do
   mapM_ displayWrite realWrites
 
 -- Write it out
-displayWrite :: Write -> Update ()
-displayWrite (Write (Column col) (Line r) s attrs) = do
+displayWrite :: ExactWrite -> Update ()
+displayWrite (ExactWrite (r, col) s attrs) = do
   moveCursor (fromIntegral r) (fromIntegral col)
   applyAttributes attrs $ drawString s
-displayWrite _ = return ()
 
 applyAttributes :: [Attribute] -> Update () -> Update ()
 applyAttributes attrs up = do
@@ -134,10 +133,10 @@ readInput w = do
     Nothing  -> readInput w
     -- Alt keys
     Just (EventCharacter '\ESC') -> do
-      ev2 <- getEvent w . Just $ 1000
+      ev2 <- readInput w 
       case ev2 of
-        Just (EventCharacter 'n') -> return $ EventSpecialKey KeyDownArrow
-        Just (EventCharacter 'p') -> return $ EventSpecialKey KeyUpArrow
+        EventCharacter 'n' -> return $ EventSpecialKey KeyDownArrow
+        EventCharacter 'p' -> return $ EventSpecialKey KeyUpArrow
         _ -> readInput w
 
     Just ev' -> return ev'
