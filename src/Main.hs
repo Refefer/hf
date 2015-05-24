@@ -15,6 +15,7 @@ import Text.EditDistance (levenshteinDistance, defaultEditCosts)
 import UI.NCurses
 
 import HfArgs (compilerOpts, Flag(..))
+import Write
 
 data Query = Query { q :: String, qLen :: Int } deriving (Show)
 data ScoreStrat = EditDist | InfixLength | CIInfixLength | Length
@@ -23,23 +24,13 @@ data ResultSet = ResultSet { query   :: Query
                            , itemSet :: [ScoredList]
                            }
 
-data SystemState = SystemState { current :: ResultSet
-                               , history :: [ResultSet]
-                               , cursorPos  :: Int
+data SystemState = SystemState { current   :: ResultSet
+                               , history   :: [ResultSet]
+                               , cursorPos :: Int
+                               , rCount    :: Int
                                }
 
 data Terminal = Exit | Updated SystemState | Selected B.ByteString
-data Justify = LJustify | RJustify | Exact Int
-data Row = Line Int | Bottom
-data Write = Write { justify :: Justify 
-                   , row :: Row
-                   , contents :: String 
-                   , attributes :: [Attribute]
-                   }
-
-
-sWrite :: Justify -> Row -> String -> Write
-sWrite j r s = Write j r s []
 
 -- Movement keys
 type Scorer = B.ByteString -> Maybe Double
@@ -51,10 +42,11 @@ main = do
   ss    <- getStrat
   lines <- readLines
   let rs        = zip [1..] lines
-  let chunkSize = fst . divMod (length rs) $ 5000
+  let len       = (length rs)
+  let chunkSize = fst . divMod len $ 5000
   let chunks    = chunk (chunkSize + 1) rs
   let qry       = Query "" 0
-  bs <- initUI $ SystemState (ResultSet qry ss chunks) [] 0
+  bs <- initUI $ SystemState (ResultSet qry ss chunks) [] 0 len
   maybe (return ()) B.putStrLn bs
 
 -- Run the Curses UI
@@ -72,23 +64,26 @@ redirect io = do
   return res
 
 ui :: SystemState -> Window -> Curses (Maybe B.ByteString)
-ui ss@(SystemState r _ cp) w = do
+ui ss@(SystemState r _ cp rc) w = do
   coords@(rows, _) <- iScreenSize
   updateWindow w $ do
     clearScreen coords
     let top_items = take (rows - 2) . printTopItems $ r
     applyWrites coords $ concat [
         updateAt boldWrite cp top_items,
-        [printStatus r],
+        [printStatus rc r],
         [printQuery . query $ r]
       ]
   render
   event <- readInput w 
-  updateWindow w $ applyWrites coords $ [sWrite LJustify Bottom "Updating..."]
+  updateWindow w $ applyWrites coords [simple LJustify Bottom "Updating..."]
   render
   case processEvent ss event of
     Exit          -> return Nothing
-    Updated newSs -> ui (newSs {cursorPos = min (rows - 3) (cursorPos newSs)}) w
+    Updated newSs -> do
+      let newCP = min (rows - 3) (cursorPos newSs)
+      let safeSs = newSs {cursorPos = newCP}
+      ui safeSs w
     Selected bs   -> return $ Just bs
 
 -- Update an element in the list at the given index
@@ -106,23 +101,22 @@ iScreenSize = do
 
 -- Evaluates the Writes
 applyWrites :: (Int, Int) -> [Write] -> Update ()
-applyWrites _ [] = return ()
-applyWrites coords@(r,_) (w@(Write _ Bottom _ _):ws) = applyWrites coords (nw:ws)
-  where nw = w { row = Line (r - 1) }
+applyWrites c ws = do
+  let realWrites = catMaybes . fmap (constrain c) $ ws
+  mapM_ displayWrite realWrites
 
-applyWrites coords (w@(Write LJustify _ _ _):ws) = applyWrites coords (nw:ws)
-  where nw = w { justify = Exact 0 }
-
-applyWrites coords@(_,c) (w@(Write RJustify _ s _):ws) = applyWrites coords (nw:ws)
-  where col = fromIntegral . max 0 $ c - (length s) - 1
-        nw  = w { justify = Exact col }
-
-applyWrites coords@(_,c) ((Write (Exact col) (Line r) s attrs):ws) = do
+-- Write it out
+displayWrite :: Write -> Update ()
+displayWrite (Write (Column col) (Line r) s attrs) = do
   moveCursor (fromIntegral r) (fromIntegral col)
+  applyAttributes attrs $ drawString s
+displayWrite _ = return ()
+
+applyAttributes :: [Attribute] -> Update () -> Update ()
+applyAttributes attrs up = do
   setAttrs True attrs
-  drawString . take (c - col - 1) $ s
+  up
   setAttrs False attrs
-  applyWrites coords ws
   where setAttrs b = mapM_ ((flip setAttribute) b)
 
 -- We don't have a clear screen in this version of the library, so write one
@@ -132,18 +126,27 @@ clearScreen (rows, cols) = do
   let clearPixel (r,c) = (moveCursor r c) >> (drawString " ")
   mapM_ clearPixel coords
 
+-- Reads from input
 readInput :: Window -> Curses Event
 readInput w = do
   ev <- getEvent w . Just $ 1000 -- Nothing doesn't work.
   case ev of
     Nothing  -> readInput w
+    -- Alt keys
+    Just (EventCharacter '\ESC') -> do
+      ev2 <- getEvent w . Just $ 1000
+      case ev2 of
+        Just (EventCharacter 'n') -> return $ EventSpecialKey KeyDownArrow
+        Just (EventCharacter 'p') -> return $ EventSpecialKey KeyUpArrow
+        _ -> readInput w
+
     Just ev' -> return ev'
 
 processEvent :: SystemState -> Event -> Terminal
 
 -- Delete
 processEvent ss (EventSpecialKey KeyBackspace) = case ss of
-  (SystemState _ (r:rs) _) -> Updated $ ss { current = r, history = rs, cursorPos = 0 }
+  (SystemState _ (r:rs) _ _) -> Updated $ ss { current = r, history = rs, cursorPos = 0 }
   _ -> Updated ss
 
 -- Down Arrow
@@ -155,14 +158,14 @@ processEvent ss (EventSpecialKey KeyUpArrow) = Updated $ newSS
   where newSS = ss { cursorPos = max 0 ((cursorPos ss) - 1) } 
 
 -- Enter
-processEvent (SystemState r _ cp) (EventCharacter '\n') = Selected bs
+processEvent (SystemState r _ cp _) (EventCharacter '\n') = Selected bs
   where bs = snd $ (orderedItems r) !! cp
 
 -- Ctrl + D
 processEvent _  (EventCharacter '\EOT') = Exit
 
 -- Add Char
-processEvent ss@(SystemState r rs _) (EventCharacter c) = Updated newSS
+processEvent ss@(SystemState r rs _ _) (EventCharacter c) = Updated newSS
   where newR = refine r . addChar . query $ r
         newSS = ss { current = newR, history = r:rs, cursorPos = 0 }
         addChar (Query qry ql) = Query (qry ++ [c]) (ql + 1)
@@ -182,13 +185,13 @@ printTopItems :: ResultSet -> [Write]
 printTopItems = zipWith writeAtLine [1..] .  items 
   where items = fmap B.unpack . fmap snd . orderedItems 
 
-printStatus :: ResultSet -> Write
-printStatus = sWrite RJustify Bottom . status . count
+printStatus :: Int -> ResultSet -> Write
+printStatus total = simple RJustify Bottom . status . count
   where count = show . sum . fmap length . itemSet 
-        status c = "[" ++ c ++ "]"
+        status c = "[" ++ c ++ "/" ++ (show total) ++ "]"
 
 writeAtLine :: Int -> String -> Write
-writeAtLine r = sWrite LJustify (Line r)
+writeAtLine r = simple LJustify (Line r)
 
 -- Refine a previous search result with query
 refine :: ResultSet -> Query -> ResultSet
