@@ -5,13 +5,13 @@ import Control.Parallel.Strategies
 import Data.Char (isAsciiUpper, toLower)
 import Data.List (sort)
 import Data.Maybe (catMaybes)
-import GHC.IO.Handle (hDuplicateTo)
+import GHC.IO.Handle (hDuplicateTo, hDuplicate)
 import Prelude hiding (lines)
 import qualified Data.ByteString.Char8 as B 
 import Safe (headDef)
 import System.Environment (getArgs)
 --import System.Console.Haskeline (runInputT, getInputChar, defaultSettings)
-import System.IO (stdin, hSetBuffering, openFile,
+import System.IO (stdin, stdout, stderr, hSetBuffering, openFile, 
                   IOMode( ReadMode ), BufferMode ( NoBuffering ) )
 import Text.EditDistance (levenshteinDistance, defaultEditCosts)
 import UI.NCurses
@@ -59,7 +59,16 @@ main = do
 
 -- Run the Curses UI
 initUI :: SystemState -> IO (Maybe B.ByteString)
-initUI rs = runCurses $ defaultWindow >>= (ui rs)
+initUI rs = do
+  redirect $ runCurses $ defaultWindow >>= (ui rs)
+
+redirect :: IO a -> IO a
+redirect io = do
+  oldStdout <- hDuplicate stdout
+  hDuplicateTo stderr stdout
+  res <- io
+  hDuplicateTo oldStdout stdout
+  return res
 
 ui :: SystemState -> Window -> Curses (Maybe B.ByteString)
 ui ss@(SystemState r _ cp) w = do
@@ -156,7 +165,7 @@ processEvent ss@(SystemState r rs _) (EventCharacter c) = Updated newSS
 processEvent ss _ = Updated ss
 
 printQuery :: Query -> Write
-printQuery = writeAtLine 0 . q 
+printQuery qry = writeAtLine 0 ("$ " ++ (q qry))
 
 boldWrite :: Write -> Write
 boldWrite w = w { attributes = (AttributeBold:(attributes w)) }
