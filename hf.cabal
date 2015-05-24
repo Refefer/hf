@@ -22,7 +22,6 @@ executable hf
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base >=4.7 && <4.8,
-                       Safe == 0.1,
                        bytestring,
                        mtl  == 2.2.1,
                        edit-distance == 0.2.1.2,

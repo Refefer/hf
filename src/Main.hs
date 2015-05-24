@@ -8,13 +8,14 @@ import Data.Maybe (catMaybes)
 import GHC.IO.Handle (hDuplicateTo, hDuplicate)
 import Prelude hiding (lines)
 import qualified Data.ByteString.Char8 as B 
-import Safe (headDef)
 import System.Environment (getArgs)
 --import System.Console.Haskeline (runInputT, getInputChar, defaultSettings)
 import System.IO (stdin, stdout, stderr, hSetBuffering, openFile, 
                   IOMode( ReadMode ), BufferMode ( NoBuffering ) )
 import Text.EditDistance (levenshteinDistance, defaultEditCosts)
 import UI.NCurses
+
+import HfArgs (compilerOpts, Flag(..))
 
 data Query = Query { q :: String, qLen :: Int } deriving (Show)
 data ScoreStrat = EditDist | InfixLength | CIInfixLength | Length
@@ -213,12 +214,9 @@ reOpenStdin = do
 -- Get query as first argument
 getStrat :: IO ScoreStrat
 getStrat = do
-  args <- getArgs
-  let edt = headDef "1" args
-  return $ case edt of "1" -> InfixLength
-                       "2" -> EditDist
-                       "3" -> Length
-                       _   -> CIInfixLength
+  args  <- getArgs
+  flags <- fmap fst . compilerOpts $ args
+  return $ if CaseSensitive `elem` flags then InfixLength else CIInfixLength
 
 -- Builds score function
 buildScorer :: ScoreStrat -> Query -> Scorer
