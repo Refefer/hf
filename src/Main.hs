@@ -84,6 +84,8 @@ ui ss@(SystemState r _ cp) w = do
       ]
   render
   event <- readInput w 
+  updateWindow w $ applyWrites coords $ [sWrite LJustify Bottom "Updating..."]
+  render
   case processEvent ss event of
     Exit          -> return Nothing
     Updated newSs -> ui (newSs {cursorPos = min (rows - 3) (cursorPos newSs)}) w
@@ -245,9 +247,9 @@ eval InfixLength (Query qs _) t
   | B.isInfixOf bqs t = Just $ lenScore + prefScore + suffScore
   | otherwise         = Nothing
   where bqs       = B.pack qs
-        tLen      = (fromIntegral . B.length $ t) :: Double
+        tLen      = fromIntegral . B.length $ t
         lenScore  = tLen ** 0.5 
-        prefScore = if B.isPrefixOf bqs t then -1 else 0
+        prefScore = if B.isPrefixOf bqs t then -0.5 else 0
         suffScore = if B.isSuffixOf bqs t then -1 else 0
 
 eval CIInfixLength qry t = eval InfixLength qry lt
