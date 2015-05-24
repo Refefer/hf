@@ -9,7 +9,6 @@ import GHC.IO.Handle (hDuplicateTo, hDuplicate)
 import Prelude hiding (lines)
 import qualified Data.ByteString.Char8 as B 
 import System.Environment (getArgs)
---import System.Console.Haskeline (runInputT, getInputChar, defaultSettings)
 import System.IO (stdin, stdout, stderr, hSetBuffering, openFile, 
                   IOMode( ReadMode ), BufferMode ( NoBuffering ) )
 import Text.EditDistance (levenshteinDistance, defaultEditCosts)
@@ -43,9 +42,9 @@ sWrite :: Justify -> Row -> String -> Write
 sWrite j r s = Write j r s []
 
 -- Movement keys
-type Scorer = B.ByteString -> Maybe Int
+type Scorer = B.ByteString -> Maybe Double
 type ResultList = [B.ByteString]
-type ScoredList = [(Int, B.ByteString)]
+type ScoredList = [(Double, B.ByteString)]
 
 main :: IO ()
 main = do
@@ -61,8 +60,9 @@ main = do
 -- Run the Curses UI
 initUI :: SystemState -> IO (Maybe B.ByteString)
 initUI rs = do
-  redirect $ runCurses $ defaultWindow >>= (ui rs)
+  redirect . runCurses $ defaultWindow >>= (ui rs)
 
+-- Redirects the stdout to stderr
 redirect :: IO a -> IO a
 redirect io = do
   oldStdout <- hDuplicate stdout
@@ -86,15 +86,17 @@ ui ss@(SystemState r _ cp) w = do
   event <- readInput w 
   case processEvent ss event of
     Exit          -> return Nothing
-    Updated newSs -> ui newSs w
+    Updated newSs -> ui (newSs {cursorPos = min (rows - 3) (cursorPos newSs)}) w
     Selected bs   -> return $ Just bs
 
+-- Update an element in the list at the given index
 updateAt :: (a -> a) -> Int -> [a] -> [a]
 updateAt f idx = loop idx 
   where loop _ [] = [] 
         loop 0 (x:xs) = (f x):xs
         loop i (x:xs) = x:(loop (i - 1) xs)
 
+-- Because Integers are inconvenient
 iScreenSize :: Curses (Int, Int)
 iScreenSize = do
   (r, c) <- screenSize
@@ -222,21 +224,21 @@ getStrat = do
 buildScorer :: ScoreStrat -> Query -> Scorer
 buildScorer ss = eval ss
 
-eval :: ScoreStrat -> Query -> B.ByteString -> Maybe Int
-eval Length _ t = Just $ B.length t
+eval :: ScoreStrat -> Query -> B.ByteString -> Maybe Double
+eval Length _ t = Just $ fromIntegral . B.length $ t
 
 eval EditDist (Query [c] 1) t
   | B.elem c t = Just $ tlen - 1
   | otherwise = Nothing
-  where tlen  = B.length t
+  where tlen  = fromIntegral . B.length $ t
 
-eval EditDist (Query qs _) t = Just $ min dist (tlen - 1)
+eval EditDist (Query qs _) t = Just $ fromIntegral . min dist $ (tlen - 1)
   where tlen = B.length t
         raw_t = B.unpack t
         dist = levenshteinDistance defaultEditCosts qs raw_t
 
 eval InfixLength (Query [c] 1) t 
-  | B.elem c t = Just 1 
+  | B.elem c t = Just $ fromIntegral $ 1 + (B.length t)
   | otherwise  = Nothing
 
 eval InfixLength (Query qs _) t
@@ -244,7 +246,7 @@ eval InfixLength (Query qs _) t
   | otherwise         = Nothing
   where bqs       = B.pack qs
         tLen      = (fromIntegral . B.length $ t) :: Double
-        lenScore  = round $ tLen ** 0.5 
+        lenScore  = tLen ** 0.5 
         prefScore = if B.isPrefixOf bqs t then -1 else 0
         suffScore = if B.isSuffixOf bqs t then -1 else 0
 
