@@ -51,7 +51,7 @@ main = do
   ss    <- getStrat
   lines <- readLines
   let rs        = zip [1..] lines
-  let chunkSize = fst . divMod (length rs) $ 1000
+  let chunkSize = fst . divMod (length rs) $ 5000
   let chunks    = chunk (chunkSize + 1) rs
   let qry       = Query "" 0
   bs <- initUI $ SystemState (ResultSet qry ss chunks) [] 0
@@ -159,16 +159,16 @@ processEvent _  (EventCharacter '\EOT') = Exit
 -- Add Char
 processEvent ss@(SystemState r rs _) (EventCharacter c) = Updated newSS
   where newR = refine r . addChar . query $ r
-        newSS = ss { current = newR, history = (r:rs), cursorPos = 0 }
+        newSS = ss { current = newR, history = r:rs, cursorPos = 0 }
         addChar (Query qry ql) = Query (qry ++ [c]) (ql + 1)
 
 processEvent ss _ = Updated ss
 
 printQuery :: Query -> Write
-printQuery qry = writeAtLine 0 ("$ " ++ (q qry))
+printQuery qry = writeAtLine 0 $ "$ " ++ (q qry)
 
 boldWrite :: Write -> Write
-boldWrite w = w { attributes = (AttributeBold:(attributes w)) }
+boldWrite w = w { attributes = AttributeBold:(attributes w) }
 
 orderedItems :: ResultSet -> ScoredList
 orderedItems = merge fst . itemSet
