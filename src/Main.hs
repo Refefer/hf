@@ -90,12 +90,11 @@ ui :: SystemState -> Window -> ColorID -> Curses (Maybe B.ByteString)
 ui ss@(SystemState r _ cp rc) w cid = do
   coords <- iScreenSize
   let top_items = take ((fst coords) - 2) . printTopItems $ r
-  let item_set  = updateAt boldWrite cp top_items
-  let hled      = item_set >>= (highlight r)
   renderWith w $ do
     clearScreen coords
+    let item_set  = updateAt boldWrite cp top_items
     applyWrites cid coords $ concat [
-        hled,
+        item_set >>= (highlight r),
         [printStatus rc r],
         [printQuery . query $ r]
       ]
