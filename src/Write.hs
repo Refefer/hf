@@ -8,12 +8,18 @@ module Write (
   , constrain
 ) where
 
-data Justify = LJustify | RJustify | Column Int deriving Show
+data Justify = LJustify 
+             | RJustify 
+             | Column Int 
+             | LeftRelative Write 
+             | RightRelative Write
+             deriving Show
+
 data Row = Line Int | Bottom | Top deriving Show
 
 data Write = RelWrite { justify  :: Justify 
-                      , row        :: Row
-                      , contents   :: String 
+                      , row      :: Row
+                      , contents :: String 
                       }
            | EWrite ExactWrite 
            deriving Show
@@ -30,8 +36,16 @@ constrain :: (Int, Int) -> Write -> Maybe ExactWrite
 constrain coords@(r,_) w@(RelWrite _ Bottom _) = constrain coords nw 
   where nw = w { row = Line (r - 1) }
 
+constrain coords w@(RelWrite (LeftRelative ow) _ _) = do
+  (ExactWrite (_,col) s) <- constrain coords ow
+  constrain coords w { justify = Column (col + (length s)) }
+
+constrain coords w@(RelWrite (RightRelative ow) _ s) = do
+  (ExactWrite (_,col) _) <- constrain coords ow
+  constrain coords w { justify = Column (col - (length s)) }
+
 constrain coords w@(RelWrite _ Top _) = constrain coords nw 
-  where nw = w { row = Line 1 }
+  where nw = w { row = Line 0 }
 
 constrain coords w@(RelWrite LJustify _ _) = constrain coords nw
   where nw = w { justify = Column 0 }

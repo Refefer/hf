@@ -2,7 +2,6 @@
 module Main where
 
 import Control.Parallel.Strategies
-import qualified Data.Char as C 
 import Data.List (sort)
 import Data.Maybe (catMaybes)
 import GHC.IO.Handle (hDuplicateTo, hDuplicate)
@@ -16,6 +15,7 @@ import UI.NCurses
 
 import HfArgs (compilerOpts, Flag(..))
 import Write
+import Utils
 
 data Query = Query { q :: String, qLen :: Int } deriving (Show)
 data ScoreStrat = EditDist | InfixLength | CIInfixLength | Length
@@ -79,12 +79,18 @@ ui ss@(SystemState r _ cp rc) w = do
         [printQuery . query $ r]
       ]
   event <- readInput w 
-  renderWith w $ applyWrites coords [iSimple LJustify Bottom "Updating..."]
-  case processEvent ss event of
+  -- We grab it again in case they resized their screen
+  c2 <- iScreenSize
+  renderWith w $ applyWrites c2 [iSimple LJustify Bottom "Updating..."]
+  updateState w ss (length top_items) event
+  
+-- Handles updating the system state
+updateState :: Window -> SystemState -> Int -> Event -> Curses (Maybe B.ByteString)
+updateState w ss itemCount event = case processEvent ss event of
     Exit          -> return Nothing
     Selected bs   -> return $ Just bs
     Updated newSs -> do
-      let newCP = min ((length top_items) - 1) (cursorPos newSs)
+      let newCP = min (itemCount - 1) (cursorPos newSs)
       let safeSs = newSs {cursorPos = newCP}
       ui safeSs w
 
@@ -274,34 +280,9 @@ eval InfixLength (Query qs _) t
 
 eval CIInfixLength qry t = eval InfixLength qry . toLower $ t
 
--- Faster toLower
-toLower :: B.ByteString -> B.ByteString
-toLower = B.map lower
-  where lower c
-          | C.isAsciiUpper c = C.toLower c
-          | otherwise        = c
-
 -- Score line accordingly
 score :: Scorer -> [ResultList] -> [ScoredList]
 score f rl   = parMap rdeepseq cms rl
   where fo x = fmap (\i -> (i, x)) $ f x
         cms  = sort . catMaybes . (fmap fo)
 
--- Chunks items into groups
-chunk :: Int -> [a] -> [[a]]
-chunk _ [] = []
-chunk amt xs = c1:(chunk amt rest)
-  where (c1, rest) = splitAt amt xs
-
--- Merge facilities for lazy top elements, instead of sorting them all
-merge :: Ord b => (a -> b) -> [[a]] -> [a]
-merge _ []  = []
-merge _ [a] = a
-merge f ss = foldr (merge2 f) [] ss
-
-merge2 :: Ord b => (a -> b) -> [a] -> [a] -> [a]
-merge2 f (a:as) (b:bs)
-  | f(a) < f(b) = a : merge2 f as (b:bs)
-  | otherwise   = b : merge2 f (a:as) bs
-merge2 _ [] rs = rs
-merge2 _ rs [] = rs
