@@ -5,6 +5,7 @@ module Write (
   , Write
   , simple
   , split
+  , content
   , constrain
 ) where
 
@@ -29,6 +30,11 @@ data ExactWrite = ExactWrite (Int, Int) String deriving Show
 -- Simple Write
 simple :: Justify -> Row -> String -> Write
 simple j r s = RelWrite j r s
+
+-- get string contents
+content :: Write -> String
+content (RelWrite _ _ s) = s
+content (EWrite(ExactWrite _ s)) = s
 
 -- Given dimensions, constrains writes to within that range
 constrain :: (Int, Int) -> Write -> Maybe ExactWrite
@@ -63,9 +69,23 @@ constrain (r,c) (EWrite (ExactWrite (line, off) s))
   | off >= (c + 1) = Nothing
   | otherwise      = Just $ ExactWrite (line, off) (take (c - off - 1) s)
 
-split :: Int -> ExactWrite -> (ExactWrite, ExactWrite)
-split at (ExactWrite (r, off) s) = (leftEW, rightEW)
-  where leftS   = take at s
-        rightS  = drop at s
-        leftEW  = ExactWrite (r, off) leftS
-        rightEW = ExactWrite (r, off + (length leftS)) rightS
+-- Splits a Write at the given index
+split :: Int -> Write -> (Write, Write)
+split idx rw@(RelWrite RJustify _ s) = splitRight rw $splitAt idx s
+split idx rw@(RelWrite (RightRelative _) _ s) = splitRight rw $ splitAt idx s
+split idx rw@(RelWrite _ _ s) = splitLeft rw $ splitAt idx s
+split idx (EWrite (ExactWrite c s)) = (leftEW, rightEW)
+  where (leftS, rightS) = splitAt idx s
+        leftEW  = EWrite (ExactWrite c leftS)
+        rightEW = RelWrite (LeftRelative leftEW) (Line (fst c)) rightS
+
+splitLeft :: Write -> (String, String) -> (Write, Write)
+splitLeft w (leftS, rightS) = (leftEW, rightEW)
+  where leftEW  = w { contents = leftS }
+        rightEW = w { justify = LeftRelative leftEW, contents = rightS }
+
+splitRight :: Write -> (String, String) -> (Write, Write)
+splitRight w (leftS, rightS) = (leftEW, rightEW)
+  where rightEW = w { contents = rightS }
+        leftEW  = w { justify = RightRelative rightEW, contents = leftS }
+

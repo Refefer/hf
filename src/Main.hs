@@ -32,14 +32,14 @@ data SystemState = SystemState { current   :: ResultSet
 
 data Terminal = Exit | Updated SystemState | Selected B.ByteString
 
-data AttrWrite = AttrWrite Write [Attribute] 
+data AttrWrite = AttrWrite Write [Attribute] (Maybe ColorID)
 
 type Scorer = B.ByteString -> Maybe Double
 type ResultList = [B.ByteString]
 type ScoredList = [(Double, B.ByteString)]
 
 iSimple :: Justify -> Row -> String -> AttrWrite
-iSimple j r s =  AttrWrite (simple j r s) []
+iSimple j r s =  AttrWrite (simple j r s) [] Nothing
 
 main :: IO ()
 main = do
@@ -56,7 +56,10 @@ main = do
 -- Run the Curses UI
 initUI :: SystemState -> IO (Maybe B.ByteString)
 initUI rs = do
-  redirect . runCurses $ defaultWindow >>= (ui rs)
+  redirect . runCurses $ do
+    w   <- defaultWindow 
+    cid <- newColorID ColorGreen ColorDefault 1
+    ui rs w cid
 
 -- Redirects the stdout to stderr
 redirect :: IO a -> IO a
@@ -67,14 +70,16 @@ redirect io = do
   hDuplicateTo oldStdout stdout
   return res
 
-ui :: SystemState -> Window -> Curses (Maybe B.ByteString)
-ui ss@(SystemState r _ cp rc) w = do
+ui :: SystemState -> Window -> ColorID -> Curses (Maybe B.ByteString)
+ui ss@(SystemState r _ cp rc) w c = do
   coords <- iScreenSize
   let top_items = take ((fst coords) - 2) . printTopItems $ r
+  let item_set  = updateAt boldWrite cp top_items
+  let hled      = item_set >>= (highlight r c)
   renderWith w $ do
     clearScreen coords
     applyWrites coords $ concat [
-        updateAt boldWrite cp top_items,
+        hled,
         [printStatus rc r],
         [printQuery . query $ r]
       ]
@@ -82,17 +87,17 @@ ui ss@(SystemState r _ cp rc) w = do
   -- We grab it again in case they resized their screen
   c2 <- iScreenSize
   renderWith w $ applyWrites c2 [iSimple LJustify Bottom "Updating..."]
-  updateState w ss (length top_items) event
+  updateState w ss (length top_items) event c
   
 -- Handles updating the system state
-updateState :: Window -> SystemState -> Int -> Event -> Curses (Maybe B.ByteString)
-updateState w ss itemCount event = case processEvent ss event of
+updateState :: Window -> SystemState -> Int -> Event -> ColorID -> Curses (Maybe B.ByteString)
+updateState w ss itemCount event c = case processEvent ss event of
     Exit          -> return Nothing
     Selected bs   -> return $ Just bs
     Updated newSs -> do
       let newCP = min (itemCount - 1) (cursorPos newSs)
       let safeSs = newSs {cursorPos = newCP}
-      ui safeSs w
+      ui safeSs w c
 
 renderWith :: Window -> Update () -> Curses ()
 renderWith w up = updateWindow w up >> render
@@ -114,18 +119,19 @@ iScreenSize = do
 applyWrites :: (Int, Int) -> [AttrWrite] -> Update ()
 applyWrites c ws = do
   let realWrites = catMaybes . fmap (constrainAW c) $ ws
-  mapM_ (uncurry displayWrite) realWrites
+  mapM_ displayWrite realWrites
 
-constrainAW :: (Int, Int) -> AttrWrite -> Maybe ([Attribute], ExactWrite)
-constrainAW coords (AttrWrite e attrs) = do
+-- Constrains based on AttrWrite
+constrainAW :: (Int, Int) -> AttrWrite -> Maybe ([Attribute], Maybe ColorID, ExactWrite)
+constrainAW coords (AttrWrite e attrs color) = do
   ew <- constrain coords e
-  return (attrs, ew)
+  return (attrs, color, ew)
 
 -- Write it out
-displayWrite :: [Attribute] -> ExactWrite  -> Update ()
-displayWrite attrs (ExactWrite (r, col) s) = do
+displayWrite :: ([Attribute], Maybe ColorID, ExactWrite) -> Update ()
+displayWrite (attrs, color, (ExactWrite (r, col) s)) = do
   moveCursor (fromIntegral r) (fromIntegral col)
-  applyAttributes attrs $ drawString s
+  applyColor color $ applyAttributes attrs $ drawString s
 
 -- Apply an attribute for a given amount
 applyAttributes :: [Attribute] -> Update () -> Update ()
@@ -134,6 +140,13 @@ applyAttributes attrs up = do
   up
   setAttrs False attrs
   where setAttrs b = mapM_ ((flip setAttribute) b)
+
+applyColor :: Maybe ColorID -> Update () -> Update ()
+applyColor Nothing up = up
+applyColor (Just c) up = do
+  setColor c
+  up
+  setColor defaultColorID
 
 -- We don't have a clear screen in this version of the library, so write one
 clearScreen :: (Int, Int) -> Update ()
@@ -197,9 +210,9 @@ boldWrite :: AttrWrite -> AttrWrite
 boldWrite = addAttr AttributeBold
 
 addAttr :: Attribute -> AttrWrite -> AttrWrite
-addAttr attr aw@(AttrWrite w attrs)
+addAttr attr aw@(AttrWrite w attrs c)
   | attr `elem` attrs = aw
-  | otherwise = AttrWrite w (attr:attrs)
+  | otherwise = AttrWrite w (attr:attrs) c
 
 orderedItems :: ResultSet -> ScoredList
 orderedItems = merge fst . itemSet
@@ -279,6 +292,31 @@ eval InfixLength (Query qs _) t
         suffScore = if B.isSuffixOf bqs t then -1 else 0
 
 eval CIInfixLength qry t = eval InfixLength qry . toLower $ t
+
+highlight :: ResultSet -> ColorID -> AttrWrite -> [AttrWrite]
+highlight (ResultSet qry ss _) c at@(AttrWrite w _ _) = do
+  let res = findSubstring ss qry (B.pack . content $ w)
+  maybe [at] (splitWrite at c) res
+
+splitWrite :: AttrWrite -> ColorID -> (Int, Int) -> [AttrWrite]
+splitWrite (AttrWrite w attrs oldC) c (lIdx, rIdx) = [lift left, newCenter, lift right]
+  where (remaining, right) = split rIdx w
+        (left, center)     = split lIdx remaining 
+        lift write         = AttrWrite write attrs oldC
+        newCenter          = AttrWrite center attrs (Just c)
+
+-- Finds the relevant range for an Item
+findSubstring :: ScoreStrat -> Query -> B.ByteString -> Maybe (Int, Int)
+findSubstring _ (Query "" _) _ = Nothing
+findSubstring InfixLength (Query qs _) t = do
+  let (leftS, rightS) = B.breakSubstring (B.pack qs) t 
+  let len = B.length leftS
+  case rightS of
+    "" -> Nothing
+    _  -> Just $ (len, len + (length qs))
+
+findSubstring CIInfixLength qry t = findSubstring InfixLength qry . toLower $ t
+findSubstring _ _ _ = Nothing
 
 -- Score line accordingly
 score :: Scorer -> [ResultList] -> [ScoredList]
