@@ -32,14 +32,17 @@ data SystemState = SystemState { current   :: ResultSet
 
 data Terminal = Exit | Updated SystemState | Selected B.ByteString
 
-data AttrWrite = AttrWrite Write [Attribute] (Maybe ColorID)
+data AttrWrite = AttrWrite { write       :: Write 
+                           , attrs       :: [Attribute]
+                           , highlighted :: Bool
+                          }
 
 type Scorer = B.ByteString -> Maybe Double
 type ResultList = [B.ByteString]
 type ScoredList = [(Double, B.ByteString)]
 
 iSimple :: Justify -> Row -> String -> AttrWrite
-iSimple j r s =  AttrWrite (simple j r s) [] Nothing
+iSimple j r s =  AttrWrite (simple j r s) [] False
 
 main :: IO ()
 main = do
@@ -71,14 +74,14 @@ redirect io = do
   return res
 
 ui :: SystemState -> Window -> ColorID -> Curses (Maybe B.ByteString)
-ui ss@(SystemState r _ cp rc) w c = do
+ui ss@(SystemState r _ cp rc) w cid = do
   coords <- iScreenSize
   let top_items = take ((fst coords) - 2) . printTopItems $ r
   let item_set  = updateAt boldWrite cp top_items
-  let hled      = item_set >>= (highlight r c)
+  let hled      = item_set >>= (highlight r)
   renderWith w $ do
     clearScreen coords
-    applyWrites coords $ concat [
+    applyWrites cid coords $ concat [
         hled,
         [printStatus rc r],
         [printQuery . query $ r]
@@ -86,8 +89,8 @@ ui ss@(SystemState r _ cp rc) w c = do
   event <- readInput w 
   -- We grab it again in case they resized their screen
   c2 <- iScreenSize
-  renderWith w $ applyWrites c2 [iSimple LJustify Bottom "Updating..."]
-  updateState w ss (length top_items) event c
+  renderWith w $ applyWrites cid c2 [iSimple LJustify Bottom "Updating..."]
+  updateState w ss (length top_items) event cid
   
 -- Handles updating the system state
 updateState :: Window -> SystemState -> Int -> Event -> ColorID -> Curses (Maybe B.ByteString)
@@ -116,35 +119,35 @@ iScreenSize = do
   return $ (fromIntegral r, fromIntegral c)
 
 -- Evaluates the Writes
-applyWrites :: (Int, Int) -> [AttrWrite] -> Update ()
-applyWrites c ws = do
+applyWrites :: ColorID -> (Int, Int) -> [AttrWrite] -> Update ()
+applyWrites cid c ws = do
   let realWrites = catMaybes . fmap (constrainAW c) $ ws
-  mapM_ displayWrite realWrites
+  mapM_ (displayWrite cid) realWrites
 
 -- Constrains based on AttrWrite
-constrainAW :: (Int, Int) -> AttrWrite -> Maybe ([Attribute], Maybe ColorID, ExactWrite)
-constrainAW coords (AttrWrite e attrs color) = do
+constrainAW :: (Int, Int) -> AttrWrite -> Maybe ([Attribute], Bool, ExactWrite)
+constrainAW coords (AttrWrite e atts hled) = do
   ew <- constrain coords e
-  return (attrs, color, ew)
+  return (atts, hled, ew)
 
 -- Write it out
-displayWrite :: ([Attribute], Maybe ColorID, ExactWrite) -> Update ()
-displayWrite (attrs, color, (ExactWrite (r, col) s)) = do
+displayWrite :: ColorID -> ([Attribute], Bool, ExactWrite) -> Update ()
+displayWrite cid (atts, hl, (ExactWrite (r, col) s)) = do
   moveCursor (fromIntegral r) (fromIntegral col)
-  applyColor color $ applyAttributes attrs $ drawString s
+  applyColor cid hl $ applyAttributes atts $ drawString s
 
 -- Apply an attribute for a given amount
 applyAttributes :: [Attribute] -> Update () -> Update ()
-applyAttributes attrs up = do
-  setAttrs True attrs
+applyAttributes atts up = do
+  setAttrs True atts
   up
-  setAttrs False attrs
+  setAttrs False atts
   where setAttrs b = mapM_ ((flip setAttribute) b)
 
-applyColor :: Maybe ColorID -> Update () -> Update ()
-applyColor Nothing up = up
-applyColor (Just c) up = do
-  setColor c
+applyColor :: ColorID -> Bool -> Update () -> Update ()
+applyColor _ False up = up
+applyColor cid _ up = do
+  setColor cid
   up
   setColor defaultColorID
 
@@ -210,9 +213,9 @@ boldWrite :: AttrWrite -> AttrWrite
 boldWrite = addAttr AttributeBold
 
 addAttr :: Attribute -> AttrWrite -> AttrWrite
-addAttr attr aw@(AttrWrite w attrs c)
-  | attr `elem` attrs = aw
-  | otherwise = AttrWrite w (attr:attrs) c
+addAttr attr aw@(AttrWrite _ attrset _)
+  | attr `elem` attrset = aw
+  | otherwise = aw { attrs = (attr:attrset) }
 
 orderedItems :: ResultSet -> ScoredList
 orderedItems = merge fst . itemSet
@@ -293,17 +296,18 @@ eval InfixLength (Query qs _) t
 
 eval CIInfixLength qry t = eval InfixLength qry . toLower $ t
 
-highlight :: ResultSet -> ColorID -> AttrWrite -> [AttrWrite]
-highlight (ResultSet qry ss _) c at@(AttrWrite w _ _) = do
-  let res = findSubstring ss qry (B.pack . content $ w)
-  maybe [at] (splitWrite at c) res
+highlight :: ResultSet -> AttrWrite -> [AttrWrite]
+highlight (ResultSet qry ss _) at = do
+  let res = findSubstring ss qry (B.pack . content $ write at)
+  maybe [at] (splitWrite at) res
 
-splitWrite :: AttrWrite -> ColorID -> (Int, Int) -> [AttrWrite]
-splitWrite (AttrWrite w attrs oldC) c (lIdx, rIdx) = [lift left, newCenter, lift right]
-  where (remaining, right) = split rIdx w
-        (left, center)     = split lIdx remaining 
-        lift write         = AttrWrite write attrs oldC
-        newCenter          = AttrWrite center attrs (Just c)
+splitWrite :: AttrWrite -> (Int, Int) -> [AttrWrite]
+splitWrite at (lIdx, rIdx) = [lift left, newCenter, lift right]
+  where w = write at
+        (remaining, right) = split rIdx w
+        (left, center) = split lIdx remaining 
+        lift w2        = at { write = w2 } 
+        newCenter      = at { write = center, highlighted = True }
 
 -- Finds the relevant range for an Item
 findSubstring :: ScoreStrat -> Query -> B.ByteString -> Maybe (Int, Int)
