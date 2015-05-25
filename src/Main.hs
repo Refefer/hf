@@ -17,25 +17,38 @@ import HfArgs (compilerOpts, Flag(..))
 import Write
 import Utils
 
-data Query = Query { q :: String, qLen :: Int } deriving (Show)
-data ScoreStrat = EditDist | InfixLength | CIInfixLength | Length
+data Query = Query { q :: String
+                   , qLen :: Int 
+                   } 
+                   deriving (Show, Eq)
+
+data ScoreStrat = EditDist 
+                | InfixLength 
+                | CIInfixLength 
+                | Length
+                deriving (Show, Eq)
+
 data ResultSet = ResultSet { query   :: Query
                            , strat   :: ScoreStrat
                            , itemSet :: [ScoredList]
                            }
+                           deriving (Show, Eq)
 
 data SystemState = SystemState { current   :: ResultSet
                                , history   :: [ResultSet]
                                , cursorPos :: Int
                                , rCount    :: Int
-                               }
+                               } deriving (Show, Eq)
 
-data Terminal = Exit | Updated SystemState | Selected B.ByteString
+data Terminal = Exit 
+              | Updated SystemState 
+              | Selected B.ByteString
+              deriving (Show, Eq)
 
 data AttrWrite = AttrWrite { write       :: Write 
                            , attrs       :: [Attribute]
                            , highlighted :: Bool
-                          }
+                          } deriving (Show, Eq)
 
 type Scorer = B.ByteString -> Maybe Double
 type ResultList = [B.ByteString]

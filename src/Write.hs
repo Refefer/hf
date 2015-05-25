@@ -14,18 +14,21 @@ data Justify = LJustify
              | Column Int 
              | LeftRelative Write 
              | RightRelative Write
-             deriving Show
+             deriving (Show, Eq)
 
-data Row = Line Int | Bottom | Top deriving Show
+data Row = Line Int 
+         | Bottom 
+         | Top 
+         deriving (Show, Eq)
 
 data Write = RelWrite { justify  :: Justify 
                       , row      :: Row
                       , contents :: String 
                       }
            | EWrite ExactWrite 
-           deriving Show
+           deriving (Show, Eq)
 
-data ExactWrite = ExactWrite (Int, Int) String deriving Show
+data ExactWrite = ExactWrite (Int, Int) String deriving (Show, Eq)
 
 -- Simple Write
 simple :: Justify -> Row -> String -> Write
