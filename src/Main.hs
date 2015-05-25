@@ -2,7 +2,7 @@
 module Main where
 
 import Control.Parallel.Strategies
-import Data.Char (isAsciiUpper, toLower)
+import qualified Data.Char as C 
 import Data.List (sort)
 import Data.Maybe (catMaybes)
 import GHC.IO.Handle (hDuplicateTo, hDuplicate)
@@ -32,17 +32,21 @@ data SystemState = SystemState { current   :: ResultSet
 
 data Terminal = Exit | Updated SystemState | Selected B.ByteString
 
--- Movement keys
+data AttrWrite = AttrWrite Write [Attribute] 
+
 type Scorer = B.ByteString -> Maybe Double
 type ResultList = [B.ByteString]
 type ScoredList = [(Double, B.ByteString)]
+
+iSimple :: Justify -> Row -> String -> AttrWrite
+iSimple j r s =  AttrWrite (simple j r s) []
 
 main :: IO ()
 main = do
   ss    <- getStrat
   lines <- readLines
   let rs        = zip [1..] lines
-  let len       = (length rs)
+  let len       = length rs
   let chunkSize = fst . divMod len $ 5000
   let chunks    = chunk (chunkSize + 1) rs
   let qry       = Query "" 0
@@ -65,26 +69,27 @@ redirect io = do
 
 ui :: SystemState -> Window -> Curses (Maybe B.ByteString)
 ui ss@(SystemState r _ cp rc) w = do
-  coords@(rows, _) <- iScreenSize
-  updateWindow w $ do
+  coords <- iScreenSize
+  let top_items = take ((fst coords) - 2) . printTopItems $ r
+  renderWith w $ do
     clearScreen coords
-    let top_items = take (rows - 2) . printTopItems $ r
     applyWrites coords $ concat [
         updateAt boldWrite cp top_items,
         [printStatus rc r],
         [printQuery . query $ r]
       ]
-  render
   event <- readInput w 
-  updateWindow w $ applyWrites coords [simple LJustify Bottom "Updating..."]
-  render
+  renderWith w $ applyWrites coords [iSimple LJustify Bottom "Updating..."]
   case processEvent ss event of
     Exit          -> return Nothing
+    Selected bs   -> return $ Just bs
     Updated newSs -> do
-      let newCP = min (rows - 3) (cursorPos newSs)
+      let newCP = min ((length top_items) - 1) (cursorPos newSs)
       let safeSs = newSs {cursorPos = newCP}
       ui safeSs w
-    Selected bs   -> return $ Just bs
+
+renderWith :: Window -> Update () -> Curses ()
+renderWith w up = updateWindow w up >> render
 
 -- Update an element in the list at the given index
 updateAt :: (a -> a) -> Int -> [a] -> [a]
@@ -100,17 +105,23 @@ iScreenSize = do
   return $ (fromIntegral r, fromIntegral c)
 
 -- Evaluates the Writes
-applyWrites :: (Int, Int) -> [Write] -> Update ()
+applyWrites :: (Int, Int) -> [AttrWrite] -> Update ()
 applyWrites c ws = do
-  let realWrites = catMaybes . fmap (constrain c) $ ws
-  mapM_ displayWrite realWrites
+  let realWrites = catMaybes . fmap (constrainAW c) $ ws
+  mapM_ (uncurry displayWrite) realWrites
+
+constrainAW :: (Int, Int) -> AttrWrite -> Maybe ([Attribute], ExactWrite)
+constrainAW coords (AttrWrite e attrs) = do
+  ew <- constrain coords e
+  return (attrs, ew)
 
 -- Write it out
-displayWrite :: ExactWrite -> Update ()
-displayWrite (ExactWrite (r, col) s attrs) = do
+displayWrite :: [Attribute] -> ExactWrite  -> Update ()
+displayWrite attrs (ExactWrite (r, col) s) = do
   moveCursor (fromIntegral r) (fromIntegral col)
   applyAttributes attrs $ drawString s
 
+-- Apply an attribute for a given amount
 applyAttributes :: [Attribute] -> Update () -> Update ()
 applyAttributes attrs up = do
   setAttrs True attrs
@@ -157,10 +168,12 @@ processEvent ss (EventSpecialKey KeyUpArrow) = Updated $ newSS
   where newSS = ss { cursorPos = max 0 ((cursorPos ss) - 1) } 
 
 -- Enter
-processEvent (SystemState r _ cp _) (EventCharacter '\n') = Selected bs
-  where bs = snd $ (orderedItems r) !! cp
+processEvent (SystemState r _ cp _) (EventCharacter '\n') = res
+  where res = case (orderedItems r) of
+          []    -> Exit
+          items -> Selected . snd $ items !! cp
 
--- Ctrl + D
+-- Ctrl D
 processEvent _  (EventCharacter '\EOT') = Exit
 
 -- Add Char
@@ -171,26 +184,31 @@ processEvent ss@(SystemState r rs _ _) (EventCharacter c) = Updated newSS
 
 processEvent ss _ = Updated ss
 
-printQuery :: Query -> Write
+printQuery :: Query -> AttrWrite
 printQuery qry = writeAtLine 0 $ "$ " ++ (q qry)
 
-boldWrite :: Write -> Write
-boldWrite w = w { attributes = AttributeBold:(attributes w) }
+boldWrite :: AttrWrite -> AttrWrite
+boldWrite = addAttr AttributeBold
+
+addAttr :: Attribute -> AttrWrite -> AttrWrite
+addAttr attr aw@(AttrWrite w attrs)
+  | attr `elem` attrs = aw
+  | otherwise = AttrWrite w (attr:attrs)
 
 orderedItems :: ResultSet -> ScoredList
 orderedItems = merge fst . itemSet
 
-printTopItems :: ResultSet -> [Write]
-printTopItems = zipWith writeAtLine [1..] .  items 
-  where items = fmap B.unpack . fmap snd . orderedItems 
+printTopItems :: ResultSet -> [AttrWrite]
+printTopItems = zipWith writeAtLine [1..] . items 
+  where items = fmap B.unpack . fmap snd . orderedItems
 
-printStatus :: Int -> ResultSet -> Write
-printStatus total = simple RJustify Bottom . status . count
+printStatus :: Int -> ResultSet -> AttrWrite
+printStatus total = iSimple RJustify Bottom . status . count
   where count = show . sum . fmap length . itemSet 
         status c = "[" ++ c ++ "/" ++ (show total) ++ "]"
 
-writeAtLine :: Int -> String -> Write
-writeAtLine r = simple LJustify (Line r)
+writeAtLine :: Int -> String -> AttrWrite
+writeAtLine r = iSimple LJustify (Line r)
 
 -- Refine a previous search result with query
 refine :: ResultSet -> Query -> ResultSet
@@ -207,7 +225,7 @@ querySet ss rl qry = ResultSet qry ss newSet
 readLines :: IO [B.ByteString] 
 readLines = do
   inp <- B.getContents
-  _   <- reOpenStdin
+  reOpenStdin
   return $ B.lines inp
 
 -- Have to reopen stdin since getContents closes it
@@ -254,11 +272,14 @@ eval InfixLength (Query qs _) t
         prefScore = if B.isPrefixOf bqs t then -0.5 else 0
         suffScore = if B.isSuffixOf bqs t then -1 else 0
 
-eval CIInfixLength qry t = eval InfixLength qry lt
-  where lt = B.map lower t
-        lower c
-          | isAsciiUpper c = toLower c
-          | otherwise      = c
+eval CIInfixLength qry t = eval InfixLength qry . toLower $ t
+
+-- Faster toLower
+toLower :: B.ByteString -> B.ByteString
+toLower = B.map lower
+  where lower c
+          | C.isAsciiUpper c = C.toLower c
+          | otherwise        = c
 
 -- Score line accordingly
 score :: Scorer -> [ResultList] -> [ScoredList]
