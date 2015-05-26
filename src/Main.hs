@@ -10,9 +10,9 @@ import qualified Data.ByteString.Char8 as B
 import System.Environment (getArgs)
 import System.IO (stdin, stdout, stderr, hSetBuffering, openFile, 
                   IOMode( ReadMode ), BufferMode ( NoBuffering ) )
-import Text.EditDistance (levenshteinDistance, defaultEditCosts)
 import UI.NCurses
 
+import Scorer
 import HfArgs (compilerOpts, Flag(..))
 import Write
 import Utils
@@ -21,12 +21,6 @@ data Query = Query { q :: String
                    , qLen :: Int 
                    } 
                    deriving (Show, Eq)
-
-data ScoreStrat = EditDist 
-                | InfixLength 
-                | CIInfixLength 
-                | Length
-                deriving (Show, Eq)
 
 data ResultSet = ResultSet { query   :: Query
                            , strat   :: ScoreStrat
@@ -50,7 +44,6 @@ data AttrWrite = AttrWrite { write       :: Write
                            , highlighted :: Bool
                           } deriving (Show, Eq)
 
-type Scorer = B.ByteString -> Maybe Double
 type ResultList = [B.ByteString]
 type ScoredList = [(Double, B.ByteString)]
 
@@ -82,7 +75,7 @@ redirect :: IO a -> IO a
 redirect io = do
   oldStdout <- hDuplicate stdout
   hDuplicateTo stderr stdout
-  res <- io
+  res       <- io
   hDuplicateTo oldStdout stdout
   return res
 
@@ -253,7 +246,7 @@ refine rs = querySet ss rl
 querySet :: ScoreStrat -> [ResultList] -> Query -> ResultSet
 querySet ss rl qry = ResultSet qry ss newSet
   where scorer  = buildScorer ss qry
-        newSet = score scorer rl
+        newSet = scoreRL scorer rl
 
 -- Read lines from stdin
 readLines :: IO [B.ByteString] 
@@ -278,39 +271,12 @@ getStrat = do
 
 -- Builds score function
 buildScorer :: ScoreStrat -> Query -> Scorer
-buildScorer ss = eval ss
-
-eval :: ScoreStrat -> Query -> B.ByteString -> Maybe Double
-eval Length _ t = Just $ fromIntegral . B.length $ t
-
-eval EditDist (Query [c] 1) t
-  | B.elem c t = Just $ tlen - 1
-  | otherwise = Nothing
-  where tlen  = fromIntegral . B.length $ t
-
-eval EditDist (Query qs _) t = Just $ fromIntegral . min dist $ (tlen - 1)
-  where tlen = B.length t
-        raw_t = B.unpack t
-        dist = levenshteinDistance defaultEditCosts qs raw_t
-
-eval InfixLength (Query [c] 1) t 
-  | B.elem c t = Just $ fromIntegral $ 1 + (B.length t)
-  | otherwise  = Nothing
-
-eval InfixLength (Query qs _) t
-  | B.isInfixOf bqs t = Just $ lenScore + prefScore + suffScore
-  | otherwise         = Nothing
-  where bqs       = B.pack qs
-        tLen      = fromIntegral . B.length $ t
-        lenScore  = tLen ** 0.5 
-        prefScore = if B.isPrefixOf bqs t then -0.5 else 0
-        suffScore = if B.isSuffixOf bqs t then -1 else 0
-
-eval CIInfixLength qry t = eval InfixLength qry . toLower $ t
+buildScorer ss qs = score $ liftSS ss (q qs)
 
 highlight :: ResultSet -> AttrWrite -> [AttrWrite]
 highlight (ResultSet qry ss _) at = do
-  let res = findSubstring ss qry (B.pack . content $ write at)
+  let scorer = liftSS ss (q qry)
+  let res    = range scorer (B.pack . content $ write at)
   maybe [at] (splitWrite at) res
 
 splitWrite :: AttrWrite -> (Int, Int) -> [AttrWrite]
@@ -321,22 +287,10 @@ splitWrite at (lIdx, rIdx) = [lift left, newCenter, lift right]
         lift w2        = at { write = w2 } 
         newCenter      = at { write = center, highlighted = True }
 
--- Finds the relevant range for an Item
-findSubstring :: ScoreStrat -> Query -> B.ByteString -> Maybe (Int, Int)
-findSubstring _ (Query "" _) _ = Nothing
-findSubstring InfixLength (Query qs _) t = do
-  let (leftS, rightS) = B.breakSubstring (B.pack qs) t 
-  let len = B.length leftS
-  case rightS of
-    "" -> Nothing
-    _  -> Just $ (len, len + (length qs))
-
-findSubstring CIInfixLength qry t = findSubstring InfixLength qry . toLower $ t
-findSubstring _ _ _ = Nothing
 
 -- Score line accordingly
-score :: Scorer -> [ResultList] -> [ScoredList]
-score f rl   = parMap rdeepseq cms rl
+scoreRL :: Scorer -> [ResultList] -> [ScoredList]
+scoreRL f rl   = parMap rdeepseq cms rl
   where fo x = fmap (\i -> (i, x)) $ f x
-        cms  = sort . catMaybes . (fmap fo)
+        cms  = sort . catMaybes . fmap fo
 
