@@ -17,7 +17,7 @@ cabal-version:       >=1.10
 
 executable hf
   --ghc-options:         -Wall -O2 -rtsopts -auto-all -caf-all -fforce-recomp -threaded -prof
-  ghc-options:         -Wall -O2 -rtsopts -threaded -fllvm
+  ghc-options:         -Wall -O2 -rtsopts -threaded -fllvm "-with-rtsopts=-N -H1G -A20m"
   main-is:             Main.hs
   -- other-modules:       
   -- other-extensions:    
