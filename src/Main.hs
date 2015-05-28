@@ -4,9 +4,8 @@ module Main where
 import Control.Parallel.Strategies
 import Control.Monad
 import Control.Monad.ST
-import Data.Maybe (catMaybes, isJust, fromMaybe)
+import Data.Maybe (catMaybes, isJust)
 import qualified Data.Vector as V
-import qualified Data.Traversable as T
 import qualified Data.Vector.Mutable as MV
 import Data.Vector.Algorithms.Intro (sort)
 
