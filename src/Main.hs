@@ -302,19 +302,19 @@ splitWrite at (lIdx, rIdx) = [lift left, newCenter, lift right]
 scoreRL :: Scorer -> [ResultList] -> [ScoredList]
 scoreRL f rl = parMap rdeepseq cms rl
   where fo x = fmap (\i -> (i, x)) $ f x
-        cms  = fromMaybe V.empty . load
-        load x = do
-          remaining <- T.sequence . V.filter isJust . fmap fo $ x
-          let v = runST $ do
-                let size = V.length remaining
-                -- Copy the array to a mutable one
-                mv <- MV.new size
-                forM_ [0..(size - 1)] $ \idx -> do
-                    let el = (V.!) remaining idx
-                    MV.write mv idx el
-                -- Sort
-                sort mv
-                V.unsafeFreeze mv
+        cms x = runST $ do
+              let remaining = V.filter isJust . fmap fo $ x
+              let size = V.length remaining
+              -- Copy the array to a mutable one
+              mv <- MV.new size
+              forM_ [0..(size - 1)] $ \idx -> do
+                  case (V.!) remaining idx of
+                    Just el -> MV.write mv idx el
+                    _       -> return ()
+                  
+              -- Sort
+              sort mv
+              V.unsafeFreeze mv
 
-          return v
-          -- return . V.fromList . sort . V.toList $ remaining
+
+
