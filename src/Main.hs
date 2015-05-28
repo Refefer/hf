@@ -2,10 +2,14 @@
 module Main where
 
 import Control.Parallel.Strategies
+import Data.Maybe (catMaybes, isJust, fromMaybe)
+import Data.Vector hiding (mapM_, take, zip, concat, length, (++), elem, zipWith, sum)
+import qualified Data.Vector as V
+import qualified Data.Traversable as T
 import Data.List (sort)
-import Data.Maybe (catMaybes, isJust)
+
 import GHC.IO.Handle (hDuplicateTo, hDuplicate)
-import Prelude hiding (lines)
+import Prelude hiding (lines, filter, null)
 import qualified Data.ByteString.Char8 as B 
 import System.Environment (getArgs)
 import System.IO (stdin, stdout, stderr, hSetBuffering, openFile, 
@@ -43,8 +47,8 @@ data AttrWrite = AttrWrite { write       :: Write
                            , highlighted :: Bool
                           } deriving (Show, Eq)
 
-type ResultList = [B.ByteString]
-type ScoredList = [(Double, B.ByteString)]
+type ResultList = Vector B.ByteString
+type ScoredList = Vector (Double, B.ByteString)
 
 iSimple :: Justify -> Row -> String -> AttrWrite
 iSimple j r s =  AttrWrite (simple j r s) [] False
@@ -53,10 +57,10 @@ main :: IO ()
 main = do
   ss    <- getStrat
   lines <- readLines
-  let rs        = zip [1..] lines
+  let rs        = zip [1..] $ lines
   let len       = length rs
   let chunkSize = fst . divMod len $ 5000
-  let chunks    = chunk (chunkSize + 1) rs
+  let chunks    = fmap fromList . chunk (chunkSize + 1) $ rs
   let qry       = Query ""
   bs <- initUI $ SystemState (ResultSet qry ss chunks) [] 0 len
   maybe (return ()) B.putStrLn bs
@@ -195,8 +199,8 @@ processEvent ss (EventSpecialKey KeyUpArrow) = Updated $ newSS
 
 -- Enter
 processEvent (SystemState r _ cp _) (EventCharacter '\n') = res
-  where res = case (orderedItems r) of
-          []    -> Exit
+  where res = case orderedItems r of 
+          [] -> Exit
           items -> Selected . snd $ items !! cp
 
 -- Ctrl D
@@ -223,8 +227,8 @@ addAttr attr aw@(AttrWrite _ attrset _)
   | attr `elem` attrset = aw
   | otherwise = aw { attrs = (attr:attrset) }
 
-orderedItems :: ResultSet -> ScoredList
-orderedItems = merge fst . itemSet
+orderedItems :: ResultSet -> [(Double, B.ByteString)]
+orderedItems = merge fst . fmap toList . itemSet
 
 printTopItems :: ResultSet -> [AttrWrite]
 printTopItems = zipWith writeAtLine [1..] . items 
@@ -232,7 +236,7 @@ printTopItems = zipWith writeAtLine [1..] . items
 
 printStatus :: Int -> ResultSet -> AttrWrite
 printStatus total = iSimple RJustify Bottom . status . count
-  where count = show . sum . fmap length . itemSet 
+  where count = show . sum . fmap V.length . itemSet 
         status c = "[" ++ c ++ "/" ++ (show total) ++ "]"
 
 writeAtLine :: Int -> String -> AttrWrite
@@ -294,7 +298,9 @@ splitWrite at (lIdx, rIdx) = [lift left, newCenter, lift right]
 
 -- Score line accordingly
 scoreRL :: Scorer -> [ResultList] -> [ScoredList]
-scoreRL f rl   = parMap rdeepseq cms rl
+scoreRL f rl = parMap rdeepseq cms rl
   where fo x = fmap (\i -> (i, x)) $ f x
-        cms  = sort . catMaybes . filter isJust . fmap fo
-
+        cms  = fromMaybe empty . load
+        load x = do
+          remaining <- T.sequence . filter isJust . fmap fo $ x
+          return . fromList . sort . toList $ remaining
