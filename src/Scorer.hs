@@ -4,9 +4,12 @@ module Scorer (
   , ScoreStrategy(..)
   , liftSS
   , Scorer
+  , CQuery
   ) where
 
 import qualified Data.ByteString.Char8 as B 
+import Control.Applicative
+import Data.Maybe (catMaybes)
 import Text.EditDistance (levenshteinDistance, defaultEditCosts)
 import Utils (toLower)
 
@@ -18,7 +21,7 @@ data ScoreStrat = EditDist
 data EditDistC    = EditDistC String
 data InfixLengthC = InfixLengthC B.ByteString Bool Int
 
-data Query  = EditStrat EditDistC 
+data CQuery  = EditStrat EditDistC 
             | InfixStrat InfixLengthC
 
 type Scorer = B.ByteString -> Maybe Double
@@ -27,7 +30,7 @@ class ScoreStrategy a where
   score :: a -> Scorer
   range :: a -> B.ByteString -> Maybe (Int, Int)
 
-instance ScoreStrategy Query where
+instance ScoreStrategy CQuery where
   score (EditStrat e)    = score e
   score (InfixStrat ilc) = score ilc
 
@@ -73,7 +76,19 @@ instance ScoreStrategy InfixLengthC where
 
   range (InfixLengthC qs True l) t = range (InfixLengthC qs False l) . toLower $ t
 
-liftSS :: ScoreStrat -> String -> Query
+instance (ScoreStrategy a) => ScoreStrategy [a] where
+  score [x] t = score x t
+  score xs t = do
+    scores <- sequence $ score <$> xs <*> (return t)
+    return $ sum scores
+
+  range [x] t = range x t
+  range xs t = do
+    case catMaybes $ range <$> xs <*> (return t) of
+      [] -> Nothing
+      as -> return $ last as
+
+liftSS :: ScoreStrat -> String -> CQuery
 liftSS EditDist q      = EditStrat $ EditDistC q
 liftSS InfixLength q   = InfixStrat $ InfixLengthC (B.pack q) False (length q)
 liftSS CIInfixLength q = InfixStrat $ InfixLengthC (toLower . B.pack $ q) True (length q)

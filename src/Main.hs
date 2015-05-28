@@ -3,7 +3,7 @@ module Main where
 
 import Control.Parallel.Strategies
 import Data.List (sort)
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, isJust)
 import GHC.IO.Handle (hDuplicateTo, hDuplicate)
 import Prelude hiding (lines)
 import qualified Data.ByteString.Char8 as B 
@@ -18,7 +18,6 @@ import Write
 import Utils
 
 data Query = Query { q :: String
-                   , qLen :: Int 
                    } 
                    deriving (Show, Eq)
 
@@ -58,7 +57,7 @@ main = do
   let len       = length rs
   let chunkSize = fst . divMod len $ 5000
   let chunks    = chunk (chunkSize + 1) rs
-  let qry       = Query "" 0
+  let qry       = Query ""
   bs <- initUI $ SystemState (ResultSet qry ss chunks) [] 0 len
   maybe (return ()) B.putStrLn bs
 
@@ -207,12 +206,14 @@ processEvent _  (EventCharacter '\EOT') = Exit
 processEvent ss@(SystemState r rs _ _) (EventCharacter c) = Updated newSS
   where newR = refine r . addChar . query $ r
         newSS = ss { current = newR, history = r:rs, cursorPos = 0 }
-        addChar (Query qry ql) = Query (qry ++ [c]) (ql + 1)
+        addChar (Query qry) = Query (qry ++ [c])
 
 processEvent ss _ = Updated ss
 
 printQuery :: Query -> AttrWrite
-printQuery qry = writeAtLine 0 $ "$ " ++ (q qry)
+printQuery qry = writeAtLine 0 $ "$ " ++ (fmap f . q $ qry)
+  where f '\t' = '~'
+        f c    = c
 
 boldWrite :: AttrWrite -> AttrWrite
 boldWrite = addAttr AttributeBold
@@ -265,17 +266,21 @@ reOpenStdin = do
 -- Get query as first argument
 getStrat :: IO ScoreStrat
 getStrat = do
-  args  <- getArgs
-  flags <- fmap fst . compilerOpts $ args
+  flags  <- getArgs >>= fmap fst . compilerOpts
   return $ if CaseSensitive `elem` flags then InfixLength else CIInfixLength
 
 -- Builds score function
 buildScorer :: ScoreStrat -> Query -> Scorer
-buildScorer ss qs = score $ liftSS ss (q qs)
+buildScorer ss = score . compileSS ss 
+
+compileSS :: ScoreStrat -> Query -> [CQuery]
+compileSS ss = fmap (liftSS ss) . splitQ
+  where splitQ = fmap B.unpack . pieces
+        pieces = B.split '\t' . B.pack . q 
 
 highlight :: ResultSet -> AttrWrite -> [AttrWrite]
 highlight (ResultSet qry ss _) at = do
-  let scorer = liftSS ss (q qry)
+  let scorer = compileSS ss $ qry
   let res    = range scorer (B.pack . content $ write at)
   maybe [at] (splitWrite at) res
 
@@ -287,10 +292,9 @@ splitWrite at (lIdx, rIdx) = [lift left, newCenter, lift right]
         lift w2        = at { write = w2 } 
         newCenter      = at { write = center, highlighted = True }
 
-
 -- Score line accordingly
 scoreRL :: Scorer -> [ResultList] -> [ScoredList]
 scoreRL f rl   = parMap rdeepseq cms rl
   where fo x = fmap (\i -> (i, x)) $ f x
-        cms  = sort . catMaybes . fmap fo
+        cms  = sort . catMaybes . filter isJust . fmap fo
 
