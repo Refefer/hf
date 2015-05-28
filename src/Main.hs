@@ -2,11 +2,13 @@
 module Main where
 
 import Control.Parallel.Strategies
+import Control.Monad
+import Control.Monad.ST
 import Data.Maybe (catMaybes, isJust, fromMaybe)
-import Data.Vector hiding (mapM_, take, zip, concat, length, (++), elem, zipWith, sum)
 import qualified Data.Vector as V
 import qualified Data.Traversable as T
-import Data.List (sort)
+import qualified Data.Vector.Mutable as MV
+import Data.Vector.Algorithms.Intro (sort)
 
 import GHC.IO.Handle (hDuplicateTo, hDuplicate)
 import Prelude hiding (lines, filter, null)
@@ -47,8 +49,8 @@ data AttrWrite = AttrWrite { write       :: Write
                            , highlighted :: Bool
                           } deriving (Show, Eq)
 
-type ResultList = Vector B.ByteString
-type ScoredList = Vector (Double, B.ByteString)
+type ResultList = V.Vector B.ByteString
+type ScoredList = V.Vector (Double, B.ByteString)
 
 iSimple :: Justify -> Row -> String -> AttrWrite
 iSimple j r s =  AttrWrite (simple j r s) [] False
@@ -60,7 +62,7 @@ main = do
   let rs        = zip [1..] $ lines
   let len       = length rs
   let chunkSize = fst . divMod len $ 5000
-  let chunks    = fmap fromList . chunk (chunkSize + 1) $ rs
+  let chunks    = fmap V.fromList . chunk (chunkSize + 1) $ rs
   let qry       = Query ""
   bs <- initUI $ SystemState (ResultSet qry ss chunks) [] 0 len
   maybe (return ()) B.putStrLn bs
@@ -228,7 +230,7 @@ addAttr attr aw@(AttrWrite _ attrset _)
   | otherwise = aw { attrs = (attr:attrset) }
 
 orderedItems :: ResultSet -> [(Double, B.ByteString)]
-orderedItems = merge fst . fmap toList . itemSet
+orderedItems = merge fst . fmap V.toList . itemSet
 
 printTopItems :: ResultSet -> [AttrWrite]
 printTopItems = zipWith writeAtLine [1..] . items 
@@ -300,7 +302,19 @@ splitWrite at (lIdx, rIdx) = [lift left, newCenter, lift right]
 scoreRL :: Scorer -> [ResultList] -> [ScoredList]
 scoreRL f rl = parMap rdeepseq cms rl
   where fo x = fmap (\i -> (i, x)) $ f x
-        cms  = fromMaybe empty . load
+        cms  = fromMaybe V.empty . load
         load x = do
-          remaining <- T.sequence . filter isJust . fmap fo $ x
-          return . fromList . sort . toList $ remaining
+          remaining <- T.sequence . V.filter isJust . fmap fo $ x
+          let v = runST $ do
+                let size = V.length remaining
+                -- Copy the array to a mutable one
+                mv <- MV.new size
+                forM_ [0..(size - 1)] $ \idx -> do
+                    let el = (V.!) remaining idx
+                    MV.write mv idx el
+                -- Sort
+                sort mv
+                V.unsafeFreeze mv
+
+          return v
+          -- return . V.fromList . sort . V.toList $ remaining
