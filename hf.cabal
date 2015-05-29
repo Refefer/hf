@@ -17,7 +17,7 @@ cabal-version:       >=1.10
 
 executable hf
   --ghc-options:         -Wall -O2 -rtsopts -auto-all -caf-all -fforce-recomp -threaded -prof
-  ghc-options:         -Wall -O2 -rtsopts -threaded -fllvm "-with-rtsopts=-N -H1G -A20m"
+  ghc-options:         -Wall -O2 -rtsopts -threaded -fllvm "-with-rtsopts=-N -H1G -A10m"
   main-is:             Main.hs
   -- other-modules:       
   -- other-extensions:    
@@ -29,5 +29,6 @@ executable hf
                        ncurses == 0.2.11,
                        vector == 0.10.12.3,
                        vector-algorithms == 0.7
+
   hs-source-dirs:      src
   default-language:    Haskell2010

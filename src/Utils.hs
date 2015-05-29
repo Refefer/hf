@@ -7,7 +7,7 @@ module Utils (
 import qualified Data.Char as C
 import qualified Data.Vector as V
 import Prelude hiding (map, any)
-import Data.ByteString.Char8 (map, ByteString, any)
+import Data.ByteString.Char8 (map, ByteString)
 
 -- Faster toLower
 toLower :: ByteString -> ByteString

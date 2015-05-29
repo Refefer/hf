@@ -46,7 +46,7 @@ data Terminal = Exit
 data AttrWrite = AttrWrite { write       :: Write 
                            , attrs       :: [Attribute]
                            , highlighted :: Bool
-                          } deriving (Show, Eq)
+                           } deriving (Show, Eq)
 
 type ResultList = V.Vector B.ByteString
 type ScoredList = V.Vector (Double, B.ByteString)
@@ -56,9 +56,8 @@ iSimple j r s =  AttrWrite (simple j r s) [] False
 
 main :: IO ()
 main = do
-  ss    <- getStrat
-  lines <- readLines
-  let rs        = V.fromList . zip [1..] $ lines
+  ss <- getStrat
+  rs <- readLines
   let len       = V.length rs
   let chunkSize = fst . divMod len $ 5000
   let chunks    = chunkV (chunkSize + 1) $ rs
@@ -214,6 +213,12 @@ processEvent ss@(SystemState r rs _ _) (EventCharacter c) = Updated newSS
         addChar (Query qry) = Query (qry ++ [c])
 
 processEvent ss _ = Updated ss
+--
+-- Refine a previous search result with query
+refine :: ResultSet -> Query -> ResultSet
+refine rs = querySet ss rl
+  where rl = (fmap (fmap snd)) . itemSet $ rs
+        ss = strat rs
 
 printQuery :: Query -> AttrWrite
 printQuery qry = writeAtLine 0 $ "$ " ++ (fmap f . q $ qry)
@@ -243,23 +248,17 @@ printStatus total = iSimple RJustify Bottom . status . count
 writeAtLine :: Int -> String -> AttrWrite
 writeAtLine r = iSimple LJustify (Line r)
 
--- Refine a previous search result with query
-refine :: ResultSet -> Query -> ResultSet
-refine rs = querySet ss rl
-  where rl = (fmap (fmap snd)) . itemSet $ rs
-        ss = strat rs
-
 querySet :: ScoreStrat -> [ResultList] -> Query -> ResultSet
 querySet ss rl qry = ResultSet qry ss newSet
-  where scorer  = buildScorer ss qry
+  where scorer  = score . compileSS ss $ qry
         newSet = scoreRL scorer rl
 
 -- Read lines from stdin
-readLines :: IO [B.ByteString] 
+readLines :: IO ScoredList 
 readLines = do
   inp <- B.getContents
   reOpenStdin
-  return $ B.lines inp
+  return . V.fromList . zip [1..] . B.lines $ inp
 
 -- Have to reopen stdin since getContents closes it
 reOpenStdin :: IO () 
@@ -273,10 +272,6 @@ getStrat :: IO ScoreStrat
 getStrat = do
   flags  <- getArgs >>= fmap fst . compilerOpts
   return $ if CaseSensitive `elem` flags then InfixLength else CIInfixLength
-
--- Builds score function
-buildScorer :: ScoreStrat -> Query -> Scorer
-buildScorer ss = score . compileSS ss 
 
 compileSS :: ScoreStrat -> Query -> [CQuery]
 compileSS ss = fmap (liftSS ss) . splitQ
