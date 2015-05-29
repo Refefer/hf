@@ -6,12 +6,12 @@ module Utils (
 
 import qualified Data.Char as C
 import qualified Data.Vector as V
-import Prelude hiding (map)
-import Data.ByteString.Char8 (map, ByteString)
+import Prelude hiding (map, any)
+import Data.ByteString.Char8 (map, ByteString, any)
 
 -- Faster toLower
 toLower :: ByteString -> ByteString
-toLower = map lower
+toLower b = map lower b
   where lower c
           | C.isAsciiUpper c = C.toLower c
           | otherwise        = c
