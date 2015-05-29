@@ -1,28 +1,27 @@
 module Utils (
   toLower
-  , chunk
+  , chunkV
   , merge
-
 ) where
 
 import qualified Data.Char as C
-import Prelude hiding (map, any)
-import Data.ByteString.Char8 (map, ByteString, any)
+import qualified Data.Vector as V
+import Prelude hiding (map)
+import Data.ByteString.Char8 (map, ByteString)
 
 -- Faster toLower
 toLower :: ByteString -> ByteString
-toLower b = if any C.isAsciiUpper b
-            then map lower b
-            else b
+toLower = map lower
   where lower c
           | C.isAsciiUpper c = C.toLower c
           | otherwise        = c
 
 -- Chunks items into groups
-chunk :: Int -> [a] -> [[a]]
-chunk _ [] = []
-chunk amt xs = c1:(chunk amt rest)
-  where (c1, rest) = splitAt amt xs
+chunkV :: Int -> V.Vector a -> [V.Vector a]
+chunkV amt v 
+  | V.null v  = []
+  | otherwise = c1:(chunkV amt rest)
+  where (c1, rest) = V.splitAt amt v
 
 -- Merge facilities for lazy top elements, instead of sorting them all
 merge :: Ord b => (a -> b) -> [[a]] -> [a]

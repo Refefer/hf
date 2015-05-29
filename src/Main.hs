@@ -58,10 +58,10 @@ main :: IO ()
 main = do
   ss    <- getStrat
   lines <- readLines
-  let rs        = zip [1..] $ lines
-  let len       = length rs
+  let rs        = V.fromList . zip [1..] $ lines
+  let len       = V.length rs
   let chunkSize = fst . divMod len $ 5000
-  let chunks    = fmap V.fromList . chunk (chunkSize + 1) $ rs
+  let chunks    = chunkV (chunkSize + 1) $ rs
   let qry       = Query ""
   bs <- initUI $ SystemState (ResultSet qry ss chunks) [] 0 len
   maybe (return ()) B.putStrLn bs
