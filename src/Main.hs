@@ -2,7 +2,6 @@
 module Main where
 
 import Data.Maybe (catMaybes)
-
 import GHC.IO.Handle (hDuplicateTo, hDuplicate)
 import Prelude hiding (lines, filter, null)
 import qualified Data.ByteString.Char8 as B 
