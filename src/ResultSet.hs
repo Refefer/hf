@@ -5,6 +5,7 @@ module ResultSet (
 ) where
 
 import Control.Parallel.Strategies
+import Control.Monad
 import Control.Monad.ST
 import Data.Maybe (isJust)
 import qualified Data.ByteString.Char8 as B
@@ -50,10 +51,11 @@ scoreRL f rl = parMap rdeepseq cms rl
               -- Copy the array to a mutable one
               mv <- MV.new vsize
 
-              V.forM_ (V.indexed remaining) $ \res -> do
-                  case res of
-                    (idx, Just el) -> MV.write mv idx el
-                    _              -> return ()
+              forM_ [0..(vsize - 1)] $ \idx -> do
+                  e <- V.indexM remaining idx
+                  case e of
+                    Just el -> MV.write mv idx el
+                    _       -> return ()
                   
               -- Sort
               sort mv
