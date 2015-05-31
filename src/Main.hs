@@ -41,6 +41,8 @@ data AttrWrite = AttrWrite { write       :: Write
                            , highlighted :: Bool
                            } deriving (Show, Eq)
 
+type UIFunc = SystemState -> Curses (Maybe B.ByteString)
+
 iSimple :: Justify -> Row -> String -> AttrWrite
 iSimple j r s =  AttrWrite (simple j r s) [] False
 
@@ -72,7 +74,7 @@ initUI rs = do
   redirect . runCurses $ do
     w   <- defaultWindow 
     cid <- newColorID ColorGreen ColorDefault 1
-    ui rs w cid
+    ui w cid rs
 
 -- Redirects the stdout to stderr
 redirect :: IO a -> IO a
@@ -83,8 +85,8 @@ redirect io = do
   hDuplicateTo oldStdout stdout
   return res
 
-ui :: SystemState -> Window -> ColorID -> Curses (Maybe B.ByteString)
-ui ss@(SystemState r _ cp rc) w cid = do
+ui :: Window -> ColorID -> UIFunc
+ui w cid ss@(SystemState r _ cp rc) = do
   coords <- iScreenSize
   let top_items = take ((fst coords) - 2) . printTopItems $ r
   renderWith w $ do
@@ -99,17 +101,17 @@ ui ss@(SystemState r _ cp rc) w cid = do
   -- We grab it again in case they resized their screen
   c2 <- iScreenSize
   renderWith w $ applyWrites cid c2 [iSimple LJustify Bottom "Updating..."]
-  updateState w ss (length top_items) event cid
+  updateState ss (length top_items) event (ui w cid)
   
 -- Handles updating the system state
-updateState :: Window -> SystemState -> Int -> Event -> ColorID -> Curses (Maybe B.ByteString)
-updateState w ss itemCount event c = case processEvent ss event of
+updateState :: SystemState -> Int -> Event -> UIFunc -> Curses (Maybe B.ByteString)
+updateState ss itemCount event f = case processEvent ss event of
     Exit          -> return Nothing
     Selected bs   -> return $ Just bs
     Updated newSs -> do
       let newCP = min (itemCount - 1) (cursorPos newSs)
       let safeSs = newSs {cursorPos = newCP}
-      ui safeSs w c
+      f safeSs
 
 renderWith :: Window -> Update () -> Curses ()
 renderWith w up = updateWindow w up >> render
