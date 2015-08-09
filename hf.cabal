@@ -22,7 +22,9 @@ executable hf
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base >=4.7 && <4.8,
-                       bytestring,
+                       bytestring == 0.10.4.0,
+                       text == 1.2.1.0,
+                       parsec == 3.1.9,
                        mtl  == 2.2.1,
                        edit-distance == 0.2.1.2,
                        parallel == 3.2.0.6,

@@ -5,13 +5,15 @@ import Data.Maybe (catMaybes)
 import GHC.IO.Handle (hDuplicateTo, hDuplicate)
 import Prelude hiding (lines, filter, null)
 import qualified Data.ByteString.Char8 as B 
-import System.Environment (getArgs)
+import System.Environment (getArgs, getEnvironment)
 import System.IO (stdin, stdout, stderr, hSetBuffering, openFile, 
                   IOMode( ReadMode ), BufferMode ( NoBuffering ) )
 import UI.NCurses
 
 import Scorer
 import HfArgs (compilerOpts, Flag(..))
+import Formatter (splitWs)
+import SimpleFormatter
 import Write
 import ResultSet 
 
@@ -48,11 +50,21 @@ iSimple j r s =  AttrWrite (simple j r s) [] False
 
 main :: IO ()
 main = do
-  ss  <- getStrat
+  flags <- getArgs >>= fmap fst . compilerOpts
+  ss  <- getStrat flags
   res <- readLines
   let qry = Query ""
   bs <- initUI $ SystemState (QueriedSet qry ss res) [] 0 (size res)
-  maybe (return ()) B.putStrLn bs
+  env <- getEnvironment
+  let retval = fmap (formatOutput env flags . B.unpack) bs
+  maybe (return ()) putStrLn retval
+
+-- Format according to the format string
+formatOutput :: [(String, String)] -> [Flag] -> String -> String
+formatOutput _ [] o = o
+formatOutput env ((SFormat sf):_) o = format sf (o:pieces) env
+  where pieces = splitWs o
+formatOutput env (_:xs) o = formatOutput env xs o
 
 -- Read lines from stdin
 readLines :: IO Results
@@ -246,10 +258,10 @@ writeAtLine :: Int -> String -> AttrWrite
 writeAtLine r = iSimple LJustify (Line r)
 
 -- Get query as first argument
-getStrat :: IO ScoreStrat
-getStrat = do
-  flags  <- getArgs >>= fmap fst . compilerOpts
-  return $ if CaseSensitive `elem` flags then InfixLength else CIInfixLength
+getStrat :: [Flag] -> IO ScoreStrat
+getStrat flags = return $ if CaseSensitive `elem` flags 
+                          then InfixLength 
+                          else CIInfixLength
 
 compileSS :: ScoreStrat -> Query -> [CQuery]
 compileSS ss = fmap (liftSS ss) . splitQ
