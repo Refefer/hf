@@ -12,7 +12,6 @@ import UI.NCurses
 
 import Scorer
 import HfArgs (compilerOpts, Flag(..))
-import Formatter (splitWs)
 import SimpleFormatter
 import Write
 import ResultSet 
@@ -63,7 +62,7 @@ main = do
 formatOutput :: [(String, String)] -> [Flag] -> String -> String
 formatOutput _ [] o = o
 formatOutput env ((SFormat sf):_) o = format sf (o:pieces) env
-  where pieces = splitWs o
+  where pieces = words o
 formatOutput env (_:xs) o = formatOutput env xs o
 
 -- Read lines from stdin
@@ -112,7 +111,7 @@ ui w cid ss@(SystemState r _ cp rc) = do
   event <- readInput w 
   -- We grab it again in case they resized their screen
   c2 <- iScreenSize
-  renderWith w $ applyWrites cid c2 [iSimple LJustify Bottom "Updating..."]
+  renderWith w $ applyWrites cid c2 [iSimple LJustify Bottom "Searching..."]
   updateState ss (length top_items) event (ui w cid)
   
 -- Handles updating the system state

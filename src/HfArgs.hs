@@ -8,11 +8,13 @@ import Data.Maybe (fromMaybe)
 
 data Flag = CaseSensitive 
           | SFormat String 
+          | ExecVP
           deriving (Show, Eq)
 
 options :: [OptDescr Flag]
 options = [
   Option ['c'] ["case-sensitive"] (NoArg CaseSensitive) "Case-sensitive searching",
+  Option ['e'] ["Executes output"] (NoArg ExecVP) "Executes the output of hf as a bash command",
   Option ['f'] ["Format the output"] (OptArg strFormat "Output Format") "Format the output"
  ]
 
