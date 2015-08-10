@@ -1,4 +1,5 @@
 module SimpleFormatter (
+  fauxLookup,
   format
 ) where
 
@@ -48,7 +49,6 @@ parseF :: String -> Maybe [Expr]
 parseF s = case (parse simpleFormat "(source)" s) of
   Right exps -> Just exps
   _          -> Nothing
-
 
 fauxLookup :: String -> FauxMap -> Maybe String
 fauxLookup k = fmap snd . find keyF

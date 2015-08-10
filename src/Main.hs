@@ -1,13 +1,14 @@
 {-# Language OverloadedStrings #-}
 module Main where
 
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, fromMaybe)
 import GHC.IO.Handle (hDuplicateTo, hDuplicate)
 import Prelude hiding (lines, filter, null)
 import qualified Data.ByteString.Char8 as B 
 import System.Environment (getArgs, getEnvironment)
 import System.IO (stdin, stdout, stderr, hSetBuffering, openFile, 
                   IOMode( ReadMode ), BufferMode ( NoBuffering ) )
+import System.Posix (executeFile)
 import UI.NCurses
 
 import Scorer
@@ -50,13 +51,25 @@ iSimple j r s =  AttrWrite (simple j r s) [] False
 main :: IO ()
 main = do
   flags <- getArgs >>= fmap fst . compilerOpts
-  ss  <- getStrat flags
-  res <- readLines
+  ss    <- getStrat flags
+  res   <- readLines
   let qry = Query ""
-  bs <- initUI $ SystemState (QueriedSet qry ss res) [] 0 (size res)
+  bs  <- initUI $ SystemState (QueriedSet qry ss res) [] 0 (size res)
   env <- getEnvironment
   let retval = fmap (formatOutput env flags . B.unpack) bs
-  maybe (return ()) putStrLn retval
+  case retval of
+    Nothing -> return ()
+    Just s -> if ExecVP `elem` flags
+              then simpleExec env s
+              else putStrLn s
+
+-- Execvp into the editor
+simpleExec :: [(String, String)] -> String -> IO ()
+simpleExec fm s = case words s of
+  [x]    -> executeFile (fromMaybe "vim" $ fauxLookup "EDITOR" fm) True [x] (Just fm)
+  (x:xs) -> executeFile x True xs (Just fm)
+  -- Hmm, should never get here.  Need to encode that
+  []     -> return ()
 
 -- Format according to the format string
 formatOutput :: [(String, String)] -> [Flag] -> String -> String

@@ -29,6 +29,7 @@ executable hf
                        edit-distance == 0.2.1.2,
                        parallel == 3.2.0.6,
                        ncurses == 0.2.11,
+                       unix == 2.7.0.1,
                        vector == 0.10.12.3,
                        vector-algorithms == 0.7
 
