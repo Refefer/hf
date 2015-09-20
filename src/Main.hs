@@ -271,10 +271,15 @@ writeAtLine r = iSimple LJustify (Line r)
 
 -- Get query as first argument
 getStrat :: [Flag] -> IO ScoreStrat
-getStrat flags
-  | CaseSensitive `elem` flags = return InfixLength
-  | SlopSearch `elem` flags = return SlopLength
-  | otherwise = return CIInfixLength
+getStrat flags = return $ if CaseSensitive `elem` flags
+                          then ss
+                          else CILength ss
+  where ss = getSearchStrat flags
+
+getSearchStrat :: [Flag] -> ScoreStrat
+getSearchStrat flags
+  | SlopSearch `elem` flags = SlopLength
+  | otherwise = InfixLength
 
 compileSS :: ScoreStrat -> Query -> [CQuery]
 compileSS ss = fmap (liftSS ss) . splitQ

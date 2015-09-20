@@ -16,17 +16,18 @@ import Utils (toLower)
 
 data ScoreStrat = EditDist 
                 | InfixLength 
-                | CIInfixLength 
                 | SlopLength
+                | CILength ScoreStrat
                 deriving (Show, Eq)
 
 data EditDistC    = EditDistC String
-data InfixLengthC = InfixLengthC B.ByteString Bool Int
+data InfixLengthC = InfixLengthC B.ByteString Int
 data SlopLengthC  = SlopLengthC B.ByteString
 
 data CQuery = EditStrat EditDistC 
             | InfixStrat InfixLengthC
             | SlopStrat SlopLengthC
+            | CIStrat CQuery
 
 type Scorer = B.ByteString -> Maybe Double
 
@@ -39,11 +40,13 @@ class ScoreStrategy a where
 instance ScoreStrategy CQuery where
   score (EditStrat e)    = score e
   score (InfixStrat ilc) = score ilc
-  score (SlopStrat l)  = score l
+  score (SlopStrat l)    = score l
+  score (CIStrat cs)     = score cs . toLower
 
   range (EditStrat e)    = range e
   range (InfixStrat ilc) = range ilc
-  range (SlopStrat l)  = range l
+  range (SlopStrat l)    = range l
+  range (CIStrat cs)     = range cs . toLower
 
 instance ScoreStrategy EditDistC where
   score (EditDistC [c]) t
@@ -60,11 +63,11 @@ instance ScoreStrategy EditDistC where
 
 instance ScoreStrategy InfixLengthC where
 
-  score (InfixLengthC c False 1)  t 
+  score (InfixLengthC c 1)  t 
     | B.isInfixOf c t = Just $ fromIntegral $ 1 + (B.length t)
     | otherwise       = Nothing
 
-  score (InfixLengthC qs False _) t
+  score (InfixLengthC qs _) t
     | B.isInfixOf qs t = Just $ lenScore + prefScore + suffScore
     | otherwise        = Nothing
     where tLen      = fromIntegral . B.length $ t
@@ -72,17 +75,13 @@ instance ScoreStrategy InfixLengthC where
           prefScore = if B.isPrefixOf qs t then -0.5 else 0
           suffScore = if B.isSuffixOf qs t then -1 else 0
 
-  score (InfixLengthC qs True l) t = score (InfixLengthC qs False l) . toLower $ t
-
-  range (InfixLengthC "" _ _) _ = Nothing
-  range (InfixLengthC qs False qsl) t = do
+  range (InfixLengthC "" _) _ = Nothing
+  range (InfixLengthC qs qsl) t = do
     let (leftS, rightS) = B.breakSubstring qs t 
     let len = B.length leftS
     case rightS of
       "" -> Nothing
       _  -> Just $ (len, len + qsl)
-
-  range (InfixLengthC qs True l) t = range (InfixLengthC qs False l) . toLower $ t
 
 instance ScoreStrategy SlopLengthC where
 
@@ -112,7 +111,6 @@ findQ qs t = sequence . loop t qs $ []
           | otherwise  = case break remT (B.head qss)  of
             (s, rest) -> loop rest (B.tail qss) (s:acc)
 
-  
 instance (ScoreStrategy a) => ScoreStrategy [a] where
   score [x] t = score x t
   score xs t = do
@@ -127,6 +125,6 @@ instance (ScoreStrategy a) => ScoreStrategy [a] where
 
 liftSS :: ScoreStrat -> String -> CQuery
 liftSS EditDist q      = EditStrat $ EditDistC q
-liftSS InfixLength q   = InfixStrat $ InfixLengthC (B.pack q) False (length q)
-liftSS CIInfixLength q = InfixStrat $ InfixLengthC (toLower . B.pack $ q) True (length q)
+liftSS InfixLength q   = InfixStrat $ InfixLengthC (B.pack q) (length q)
 liftSS SlopLength q    = SlopStrat . SlopLengthC . B.pack $ q
+liftSS (CILength ss) q = CIStrat $ liftSS ss (B.unpack . toLower . B.pack $ q)
