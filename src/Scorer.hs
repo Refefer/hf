@@ -5,6 +5,7 @@ module Scorer (
   , liftSS
   , Scorer
   , CQuery
+  , variance
   ) where
 
 import Prelude hiding (break)
@@ -22,7 +23,7 @@ data ScoreStrat = EditDist
 
 data EditDistC    = EditDistC String
 data InfixLengthC = InfixLengthC B.ByteString Int
-data SlopLengthC  = SlopLengthC B.ByteString
+data SlopLengthC  = SlopLengthC ([Int] -> Double) B.ByteString
 
 data CQuery = EditStrat EditDistC 
             | InfixStrat InfixLengthC
@@ -85,19 +86,27 @@ instance ScoreStrategy InfixLengthC where
 
 instance ScoreStrategy SlopLengthC where
 
-  score (SlopLengthC qs) t = do
-    scores <- findQ qs t
-    let total = sum $ if null scores then [] else init scores
+  score (SlopLengthC f qs) t = do
+    scores <- fmap (fmap fromIntegral) $ findQ qs t
+    let total = f $ if null scores then [] else init scores
     let lenScore  = (fromIntegral . B.length $ t) ** 0.5 
-    return $ lenScore + (fromIntegral total)
+    return $ lenScore + total
 
-  range (SlopLengthC "") _ = Nothing
-  range (SlopLengthC qs) t = do
+  range (SlopLengthC _ "") _ = Nothing
+  range (SlopLengthC _ qs) t = do
     locs <- fmap reverse $ findQ qs t 
     let total = case locs of
                []       -> (0, 0)
                (x:xs) -> (x-1, x + (sum xs))
     return total
+
+variance :: [Int] -> Double
+variance [] = 0.0
+variance xs = (sum . diff $ total) / (tLen)
+  where ixs    = fmap fromIntegral xs
+        total  = sum ixs
+        diff t = fmap (\x -> (x - t) ** 2) ixs
+        tLen   = fromIntegral $ length xs
 
 findQ :: B.ByteString -> B.ByteString -> Maybe [Int]
 findQ qs t = sequence . loop t qs $ []
@@ -126,5 +135,5 @@ instance (ScoreStrategy a) => ScoreStrategy [a] where
 liftSS :: ScoreStrat -> String -> CQuery
 liftSS EditDist q      = EditStrat $ EditDistC q
 liftSS InfixLength q   = InfixStrat $ InfixLengthC (B.pack q) (length q)
-liftSS SlopLength q    = SlopStrat . SlopLengthC . B.pack $ q
+liftSS SlopLength q    = SlopStrat . SlopLengthC variance . B.pack $ q
 liftSS (CILength ss) q = CIStrat $ liftSS ss (B.unpack . toLower . B.pack $ q)
