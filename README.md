@@ -8,7 +8,7 @@ Install
 
 You'll need to have the ncursesw library installed, which will vary from operating system to operating system.
 
-`cabal build` or `cabal install` should be sufficient after setting up the sandboxma
+`cabal build` or `cabal install` should be sufficient after setting up the sandbox.
 
 To Use
 ------
@@ -23,7 +23,7 @@ The Up/Down (or Alt-P/Alt-N) keys selects which file to open.  Enter opens selec
 
 Sometimes a single query isn't enough to differentiate between the files.  By pressing Tab, _hf_ will add another 'searcher' query for additional filtering.
 
-There are currenquickfindtly two modes of searching: substring and slop, both with case sensitive varieties:
+There are currently two modes of searching: substring and slop, both with case sensitive varieties:
     ![Demonstration](demonstration.gif)
 
 Enter selects the current item.
