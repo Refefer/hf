@@ -67,14 +67,13 @@ constrain coords (RelWrite (Column off) (Line line) s) = constrain coords ew
   where ew = EWrite $ ExactWrite (line, off) s
 
 constrain (r,c) (EWrite (ExactWrite (line, off) s))
-  | s == ""        = Nothing
   | line >= r      = Nothing
   | off >= (c + 1) = Nothing
   | otherwise      = Just $ ExactWrite (line, off) (take (c - off - 1) s)
 
 -- Splits a Write at the given index
 split :: Int -> Write -> (Write, Write)
-split idx rw@(RelWrite RJustify _ s) = splitRight rw $splitAt idx s
+split idx rw@(RelWrite RJustify _ s) = splitRight rw $ splitAt idx s
 split idx rw@(RelWrite (RightRelative _) _ s) = splitRight rw $ splitAt idx s
 split idx rw@(RelWrite _ _ s) = splitLeft rw $ splitAt idx s
 split idx (EWrite (ExactWrite c s)) = (leftEW, rightEW)

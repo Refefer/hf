@@ -288,9 +288,15 @@ compileSS ss = fmap (liftSS ss) . splitQ
 
 highlight :: QueriedSet -> AttrWrite -> [AttrWrite]
 highlight (QueriedSet qry ss _) at = do
-  let scorer = compileSS ss $ qry
+  let scorer = compileSS ss qry
   let res    = range scorer (B.pack . content $ write at)
-  maybe [at] (splitWrite at) res
+  maybe [at] (splitWrites at) res
+
+splitWrites :: AttrWrite -> [(Int, Int)] -> [AttrWrite]
+splitWrites atw [] = [atw]
+splitWrites atw locs = foldr loop [atw] locs
+  where loop loc (at:rest) = (splitWrite at loc) ++ rest
+        loop _ ats = ats
 
 splitWrite :: AttrWrite -> (Int, Int) -> [AttrWrite]
 splitWrite at (lIdx, rIdx) = [lift left, newCenter, lift right]

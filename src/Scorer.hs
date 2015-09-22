@@ -36,7 +36,7 @@ class ScoreStrategy a where
   -- Takes a query and a title and scores whether or not it matches
   score :: a -> Scorer
   -- Indicates the bounding area of the query
-  range :: a -> B.ByteString -> Maybe (Int, Int)
+  range :: a -> B.ByteString -> Maybe [(Int, Int)]
 
 instance ScoreStrategy CQuery where
   score (EditStrat e)    = score e
@@ -82,7 +82,7 @@ instance ScoreStrategy InfixLengthC where
     let len = B.length leftS
     case rightS of
       "" -> Nothing
-      _  -> Just $ (len, len + qsl)
+      _  -> Just $ [(len, len + qsl)]
 
 instance ScoreStrategy SlopLengthC where
 
@@ -95,10 +95,11 @@ instance ScoreStrategy SlopLengthC where
   range (SlopLengthC _ "") _ = Nothing
   range (SlopLengthC _ qs) t = do
     locs <- fmap reverse $ findQ qs t 
-    let total = case locs of
-               []       -> (0, 0)
-               (x:xs) -> (x-1, x + (sum xs))
-    return total
+    let indexes = scanl (+) 0 locs
+    --let total = case locs of
+    --           []     -> (0, 0)
+    --           (x:xs) -> (x-1, x + (sum xs))
+    return [(idx - 1, idx) | idx <- indexes]
 
 variance :: [Int] -> Double
 variance [] = 0.0
@@ -130,7 +131,7 @@ instance (ScoreStrategy a) => ScoreStrategy [a] where
   range xs t = do
     case catMaybes $ range <$> xs <*> (return t) of
       [] -> Nothing
-      as -> return $ last as
+      as -> return . concat $ as
 
 liftSS :: ScoreStrat -> String -> CQuery
 liftSS EditDist q      = EditStrat $ EditDistC q
