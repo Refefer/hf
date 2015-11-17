@@ -1,14 +1,17 @@
 {-# Language OverloadedStrings #-}
 module Main where
 
+--import Debug.Trace (trace)
+import Data.Bits ((.&.))
 import Data.Maybe (catMaybes, fromMaybe)
 import GHC.IO.Handle (hDuplicateTo, hDuplicate)
-import Prelude hiding (lines, filter, null)
 import qualified Data.ByteString.Char8 as B 
+import Prelude hiding (sequence)
 import System.Environment (getArgs, getEnvironment)
-import System.IO (stdin, stdout, stderr, hSetBuffering, openFile, 
+import System.IO (stdin, stdout, stderr, hSetBuffering, openFile,
                   IOMode( ReadMode ), BufferMode ( NoBuffering ) )
-import System.Posix (executeFile)
+import System.Posix (executeFile, getFdStatus, fileMode)
+import System.Process (waitForProcess, createProcess, CreateProcess(std_out), proc, StdStream( CreatePipe ))
 import UI.NCurses
 
 import Scorer
@@ -51,10 +54,9 @@ iSimple j r s =  AttrWrite (simple j r s) [] False
 main :: IO ()
 main = do
   flags <- getArgs >>= fmap fst . compilerOpts
-  ss    <- getStrat flags
-  res   <- readLines
-  let qry = Query ""
-  bs  <- initUI $ SystemState (QueriedSet qry ss res) [] 0 (size res)
+  ss  <- getStrat flags
+  res <- readLines
+  bs  <- initUI $ SystemState (QueriedSet (Query "") ss res) [] 0 (size res)
   env <- getEnvironment
   let retval = fmap (formatOutput env flags . B.unpack) bs
   case retval of
@@ -78,12 +80,39 @@ formatOutput env ((SFormat sf):_) o = format sf (o:pieces) env
   where pieces = words o
 formatOutput env (_:xs) o = formatOutput env xs o
 
--- Read lines from stdin
 readLines :: IO Results
 readLines = do
+  piped <- isPiped
+  bLines <- if piped
+            then readLinesStdin 
+            else runFind "."
+  return $ build bLines
+
+runFind :: FilePath -> IO [B.ByteString]
+runFind dir = do
+  (_, Just hout, _, ph) <- createProcess (proc "find" [dir]) { std_out = CreatePipe}
+  input <- fmap B.lines . B.hGetContents $ hout
+  _ <- waitForProcess ph
+  return input
+
+-- Check if our stdin is piped.  conversion song and dance
+isPiped :: IO Bool
+isPiped = do
+  -- Normally, I'd like to call something like handleToFd on stdin, but
+  -- that has the side effect of closing the handle
+  fs <- getFdStatus 0
+  -- Have to mask the filemode
+  let fm = (fileMode fs) .&. 61440
+  -- 4096, on linux at least, indicates the input is fifo
+  let piped = fm .&. 4096
+  return $ 0 /= piped
+
+-- Read lines from stdin
+readLinesStdin :: IO [B.ByteString]
+readLinesStdin = do
   inp <- B.getContents
   reOpenStdin
-  return . build . B.lines $ inp
+  return . B.lines $ inp
 
 -- Have to reopen stdin since getContents closes it
 reOpenStdin :: IO () 
@@ -111,21 +140,22 @@ redirect io = do
 
 ui :: Window -> ColorID -> UIFunc
 ui w cid ss@(SystemState r _ cp rc) = do
-  coords <- iScreenSize
-  let top_items = take ((fst coords) - 2) . printTopItems $ r
-  renderWith w $ do
-    clearScreen coords
-    let item_set  = updateAt boldWrite cp top_items
-    applyWrites cid coords $ concat [
-        item_set >>= (highlight r),
-        [printStatus rc r],
-        [printQuery . query $ r]
-      ]
-  event <- readInput w 
-  -- We grab it again in case they resized their screen
-  c2 <- iScreenSize
-  renderWith w $ applyWrites cid c2 [iSimple LJustify Bottom "Searching..."]
-  updateState ss (length top_items) event (ui w cid)
+    coords <- iScreenSize
+    let top_items = take ((fst coords) - 2) . printTopItems $ r
+    renderWith w $ do
+      clearScreen coords
+      let item_set  = updateAt boldWrite cp top_items
+      applyWrites cid coords $ concat [
+          item_set >>= (highlight r),
+          [printStatus rc r],
+          [printQuery . query $ r]
+        ]
+    event <- readInput w 
+    -- We grab it again in case they resized their screen
+    c2 <- iScreenSize
+    renderWith w $ applyWrites cid c2 [iSimple LJustify Bottom "Searching..."]
+    updateState ss (length top_items) event (ui w cid)
+  where renderWith win up = updateWindow win up >> render
   
 -- Handles updating the system state
 updateState :: SystemState -> Int -> Event -> UIFunc -> Curses (Maybe B.ByteString)
@@ -136,9 +166,6 @@ updateState ss itemCount event f = case processEvent ss event of
       let newCP = min (itemCount - 1) (cursorPos newSs)
       let safeSs = newSs {cursorPos = newCP}
       f safeSs
-
-renderWith :: Window -> Update () -> Curses ()
-renderWith w up = updateWindow w up >> render
 
 -- Update an element in the list at the given index
 updateAt :: (a -> a) -> Int -> [a] -> [a]
@@ -151,7 +178,7 @@ updateAt f idx = loop idx
 iScreenSize :: Curses (Int, Int)
 iScreenSize = do
   (r, c) <- screenSize
-  return $ (fromIntegral r, fromIntegral c)
+  return (fromIntegral r, fromIntegral c)
 
 -- Evaluates the Writes
 applyWrites :: ColorID -> (Int, Int) -> [AttrWrite] -> Update ()
@@ -289,7 +316,7 @@ compileSS ss = fmap (liftSS ss) . splitQ
 highlight :: QueriedSet -> AttrWrite -> [AttrWrite]
 highlight (QueriedSet qry ss _) at = do
   let scorer = compileSS ss qry
-  let res    = range scorer (B.pack . content $ write at)
+  let res    = range scorer . B.pack . content $ write at
   maybe [at] (splitWrites at) res
 
 splitWrites :: AttrWrite -> [(Int, Int)] -> [AttrWrite]
