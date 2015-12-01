@@ -11,7 +11,7 @@ import System.Environment (getArgs, getEnvironment)
 import System.IO (stdin, stdout, stderr, hSetBuffering, openFile,
                   IOMode( ReadMode ), BufferMode ( NoBuffering ) )
 import System.Posix (executeFile, getFdStatus, fileMode)
-import System.Process (waitForProcess, createProcess, CreateProcess(std_out), proc, StdStream( CreatePipe ))
+import System.Process (waitForProcess, createProcess, CreateProcess(std_out), shell, StdStream( CreatePipe ))
 import UI.NCurses
 
 import Scorer
@@ -90,7 +90,9 @@ readLines = do
 
 runFind :: FilePath -> IO [B.ByteString]
 runFind dir = do
-  (_, Just hout, _, ph) <- createProcess (proc "find" [dir]) { std_out = CreatePipe}
+  let cmd = concat ["find ", dir, " -type f"]
+  -- I can't seem to get proc to correctly build the args, so using shell
+  (_, Just hout, _, ph) <- createProcess (shell cmd) { std_out = CreatePipe}
   input <- fmap B.lines . B.hGetContents $ hout
   _ <- waitForProcess ph
   return input

@@ -17,6 +17,10 @@ Using _hf_ is simple: simply pipe input into hf:
 
     find . -type f | hf
 
+or even more simply:
+    
+    hf
+
 and start typing
 
 The Up/Down (or Alt-P/Alt-N) keys selects which file to open.  Enter opens selects the highlighted file. 
